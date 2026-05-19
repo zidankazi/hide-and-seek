@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical 
+import torch.optim as optim
 
 # PPO needs a brain that does two things when it sees a state:
 # Actor: "What should I do?" -> Outputs a probability for each action
@@ -34,6 +35,15 @@ class ActorCritic(nn.Module):
         action = dist.sample() # Randomly picks an action based on the probabilities
         log_prob = dist.log_prob(action) # Tells us the log probability of the picked action (needed later for PPO math)
         return action, log_prob, value
+
+    def evaluate(self, obs, actions):
+        # Re-evaluates old decisions with current network weights
+        # "What do I think about those past actions now?"
+        logits, values = self.forward(obs)
+        dist = Categorical(logits=logits)
+        log_probs = dist.log_prob(actions)
+        entropy = dist.entropy() # entropy = uniformity, high entropy = high uniformity = info is spread out evenly and randomly
+        return log_probs, entropy, values
 
 # Before the network can learn, it needs experience. The agent plays the game for a bunch of steps, and 
 # The RolloutBuffer is a recording of what it saw, what it did, what reward it got, etc.
@@ -103,3 +113,19 @@ class RolloutBuffer():
         
         return adv, ret
 
+class PPO():
+    def __init__(self, obs_dim, act_dim, learning_rate=3e-4):
+        self.ac = ActorCritic(obs_dim, act_dim) # Create instance of ActorCritic
+        self.buffer = RolloutBuffer() # Create instance of RolloutBuffer
+        self.optimizer = optim.Adam(self.ac.parameters(), lr=learning_rate)  # Create optimizer
+
+    def select_action(self, obs): # Agent recieves an observation and needs to pick an action
+        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0) # Convert the observations numpy array to a tensor for PyTorch
+        action, log_prob, value = self.ac.act(obs_t)
+        return action.item(), log_prob.item(), value.item() # .item() strips the tensor wrapper so it returns a plain Python number
+
+    def store_transition(self, obs, action, log_prob, reward, done, value): # Stores the transition in the buffer
+        self.buffer.store(obs, action, log_prob, reward, done, value)
+
+    def update(self, last_obs, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64):
+        # TODO
