@@ -63,21 +63,20 @@ class RolloutBuffer():
         self.dones = []
         self.values = []
 
-    """ 
-    Walks backwards through steps to figure out which actions actually deserve credit
-    Computes advantages (was this action better than expected?) and returns (total future reward)
-    Gamma = discount factor, with gamma = 0.99:
-        Step 0 reward is worth: 1
-        Step 1 reward is worth: 1 * 0.99 = 0.99
-        Step 2 reward is worth: 1 * 0.99 * 0.99 = 0.98 
-    Lambda = how far back do I spread credit?
-        It mostly credits recent actions but still gives some credit to actions further back
-        If Lambda was 1, spread credit way back and trust the full process
-        If Lambda was 0, only credit the most recent step
-        Lambda is 0.95, good balance that mostly credits recent actions
-    """
-        
     def compute_returns(self, last_value, gamma=0.99, lam=0.95):
+        """
+        Walks backwards through steps to figure out which actions actually deserve credit
+        Computes advantages (was this action better than expected?) and returns (total future reward)
+        Gamma = discount factor, with gamma = 0.99:
+            Step 0 reward is worth: 1
+            Step 1 reward is worth: 1 * 0.99 = 0.99
+            Step 2 reward is worth: 1 * 0.99 * 0.99 = 0.98
+        Lambda = how far back do I spread credit?
+            It mostly credits recent actions but still gives some credit to actions further back
+            If Lambda was 1, spread credit way back and trust the full process
+            If Lambda was 0, only credit the most recent step
+            Lambda is 0.95, good balance that mostly credits recent actions
+        """
         gae = 0 # Generalized Advantage Estimation
         advantages = [] 
 
