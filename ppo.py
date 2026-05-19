@@ -40,12 +40,12 @@ class ActorCritic(nn.Module):
 
 class RolloutBuffer():
     def __init__(self): #
-        self.obs = []
-        self.actions = []
-        self.log_probs = []
-        self.rewards = []
-        self.dones = []
-        self.values = []
+        self.obs = []          # What the agent saw each step 
+        self.actions = []      # What action it picked
+        self.log_probs = []    # Log-probability of the chosen action (needed for PPO math)
+        self.rewards = []      # Reward received
+        self.dones = []        # Boolean of Did the episode end this step?
+        self.values = []       # Network's estimate of future reward from this state
 
     def store(self, obs, action, log_prob, reward, done, value): # appends each item to its list
         self.obs.append(obs)
@@ -63,4 +63,44 @@ class RolloutBuffer():
         self.dones = []
         self.values = []
 
+    """ 
+    Walks backwards through steps to figure out which actions actually deserve credit
+    Computes advantages (was this action better than expected?) and returns (total future reward)
+    Gamma = discount factor, with gamma = 0.99:
+        Step 0 reward is worth: 1
+        Step 1 reward is worth: 1 * 0.99 = 0.99
+        Step 2 reward is worth: 1 * 0.99 * 0.99 = 0.98 
+    Lambda = how far back do I spread credit?
+        It mostly credits recent actions but still gives some credit to actions further back
+        If Lambda was 1, spread credit way back and trust the full process
+        If Lambda was 0, only credit the most recent step
+        Lambda is 0.95, good balance that mostly credits recent actions
+    """
+        
+    def compute_returns(self, last_value, gamma=0.99, lam=0.95):
+        gae = 0 # Generalized Advantage Estimation
+        advantages = [] 
+
+        for t in reversed(range(len(self.rewards))): # iterate through list backwards
+            if t == len(self.rewards) - 1: 
+                next_value = last_value
+            else:
+                next_value = self.values[t + 1]
+
+            # delta = was this step better or worse than expected?
+            # Reward you got + discounted future - what you expected (positive = good)
+            delta = self.rewards[t] + gamma * next_value * (1 - self.dones[t]) - self.values[t] 
+
+            # Accumulate GAE through loop then insert into advantages
+            gae = delta + gamma * lam * (1 - self.dones[t]) * gae
+            advantages.insert(0, gae)
+
+        # Return advantages and returns as tensors
+        adv = torch.tensor(advantages, dtype=torch.float32)
+        returns = []
+        for i in range(len(advantages)):
+            returns.append(advantages[i] + self.values[i])
+        ret = torch.tensor(returns, dtype=torch.float32)
+        
+        return adv, ret
 
