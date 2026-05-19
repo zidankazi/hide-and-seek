@@ -35,3 +35,32 @@ class ActorCritic(nn.Module):
         log_prob = dist.log_prob(action) # Tells us the log probability of the picked action (needed later for PPO math)
         return action, log_prob, value
 
+# Before the network can learn, it needs experience. The agent plays the game for a bunch of steps, and 
+# The RolloutBuffer is a recording of what it saw, what it did, what reward it got, etc.
+
+class RolloutBuffer():
+    def __init__(self): #
+        self.obs = []
+        self.actions = []
+        self.log_probs = []
+        self.rewards = []
+        self.dones = []
+        self.values = []
+
+    def store(self, obs, action, log_prob, reward, done, value): # appends each item to its list
+        self.obs.append(obs)
+        self.actions.append(action)
+        self.log_probs.append(log_prob)
+        self.rewards.append(reward)
+        self.dones.append(done)
+        self.values.append(value)
+
+    def clear(self): # resets all lists to empty
+        self.obs = []
+        self.actions = []
+        self.log_probs = []
+        self.rewards = []
+        self.dones = []
+        self.values = []
+
+
