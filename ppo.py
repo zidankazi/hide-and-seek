@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical 
 import torch.optim as optim
+import gymnasium as gym # for CartPole-v1 environment
 
 # PPO needs a brain that does two things when it sees a state:
 # Actor: "What should I do?" -> Outputs a probability for each action
@@ -45,10 +46,11 @@ class ActorCritic(nn.Module):
         entropy = dist.entropy() # entropy = uniformity, high entropy = high uniformity = info is spread out evenly and randomly
         return log_probs, entropy, values
 
-# Before the network can learn, it needs experience. The agent plays the game for a bunch of steps, and 
-# The RolloutBuffer is a recording of what it saw, what it did, what reward it got, etc.
-
 class RolloutBuffer():
+    """
+    The RolloutBuffer is a recording of what the agent saw, what it did, what reward it got, etc.
+    It's used to update the network weights.
+    """
     def __init__(self): #
         self.obs = []          # What the agent saw each step 
         self.actions = []      # What action it picked
@@ -129,7 +131,14 @@ class PPO():
 
     def update(self, last_obs, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
         """
-        Docstring TODO
+        By the time we call update, we've already collected a bunch of experience and stored it in the buffer.
+        Now we need to use that experience to update the network weights.
+        We do this by:
+        1. Computing the advantages and returns
+        2. Converting the buffer lists to PyTorch tensors
+        3. Normalizing the advantages to help training
+        4. Training the network
+        5. Clearing the buffer
         """
         last_obs_t = torch.tensor(last_obs, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad(): 
@@ -183,3 +192,42 @@ class PPO():
                 self.optimizer.step()
 
         self.buffer.clear()
+
+if __name__ == "__main__":
+    env = gym.make("CartPole-v1") # Create the environment
+    obs_dim = env.observation_space.shape[0] # Get the dimension of the observation space
+    act_dim = env.action_space.n # Get the dimension of the action space
+    ppo = PPO(obs_dim, act_dim) # Create the PPO agent
+
+    # Training loop
+    rollout_steps = 2048    # How many steps to collect before each update
+    total_timesteps = 100_000
+    steps_done = 0
+    while steps_done < total_timesteps:
+        obs, _ = env.reset()       # Start a new episode, get first observation
+        done = False
+
+        # Collect "rollout_steps" number of steps
+        for _ in range(rollout_steps):
+            # Select an action, take the action, store the transition, update the observation
+            action, log_prob, value = ppo.select_action(obs)
+
+            # Take the action, get the next observation, reward, terminated, truncated, and info
+            next_obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+
+            # Store the transition
+            ppo.store_transition(obs, action, log_prob, reward, done, value)
+            obs = next_obs
+            # Update the number of steps done
+            steps_done += 1
+
+            # If the episode is done, start a new episode
+            if done:
+                obs, _ = env.reset()
+
+        # Update the network
+        ppo.update(obs)
+        
+    print(f"Steps: {steps_done}") # Add some printing to see the agent learning
+    env.close() # Close the environment
