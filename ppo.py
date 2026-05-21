@@ -25,7 +25,7 @@ class ActorCritic(nn.Module):
         # Takes the game state, runs it through the brain, returns a decision and assessment
         features = self.shared(x)
         logits = self.policy_head(features) # Scores for each action
-        value = self.value_head(features) # 
+        value = self.value_head(features).squeeze(-1) # Value of the current state (squeezed to remove the last dimension)
         return logits, value
 
     def act(self, obs): 
@@ -203,10 +203,11 @@ if __name__ == "__main__":
     rollout_steps = 2048    # How many steps to collect before each update
     total_timesteps = 100_000
     steps_done = 0
+    obs, _ = env.reset()
+    done = False
+    episode_return = 0
+    episode_returns = []
     while steps_done < total_timesteps:
-        obs, _ = env.reset()       # Start a new episode, get first observation
-        done = False
-
         # Collect "rollout_steps" number of steps
         for _ in range(rollout_steps):
             # Select an action, take the action, store the transition, update the observation
@@ -215,6 +216,7 @@ if __name__ == "__main__":
             # Take the action, get the next observation, reward, terminated, truncated, and info
             next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
+            episode_return += reward
 
             # Store the transition
             ppo.store_transition(obs, action, log_prob, reward, done, value)
@@ -224,9 +226,14 @@ if __name__ == "__main__":
 
             # If the episode is done, start a new episode
             if done:
+                episode_returns.append(episode_return)
+                episode_return = 0
                 obs, _ = env.reset()
 
         # Update the network
         ppo.update(obs)
-        print(f"Steps: {steps_done}")
+        if episode_returns:
+            mean_return = np.mean(episode_returns)
+            print(f"Steps: {steps_done} | Episodes: {len(episode_returns)} | Mean Return: {mean_return:.1f}")
+            episode_returns = []
     env.close() # Close the environment
