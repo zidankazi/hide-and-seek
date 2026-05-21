@@ -13,13 +13,13 @@ class ActorCritic(nn.Module):
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         self.shared = nn.Sequential(
-            nn.Linear(obs_dim, 64),
+            nn.Linear(obs_dim, 128),
             nn.Tanh(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.Tanh(),
         )
-        self.policy_head = nn.Linear(64, act_dim)
-        self.value_head = nn.Linear(64, 1)
+        self.policy_head = nn.Linear(128, act_dim)
+        self.value_head = nn.Linear(128, 1)
 
     def forward(self, x):
         # Takes the game state, runs it through the brain, returns a decision and assessment
