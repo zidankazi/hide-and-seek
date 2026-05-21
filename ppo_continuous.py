@@ -156,7 +156,7 @@ class PPO():
 
         # Convert the buffer lists to PyTorch tensors
         obs = torch.tensor(np.array(self.buffer.obs), dtype=torch.float32)
-        actions = torch.tensor(np.array(self.buffer.actions), dtype=float32)
+        actions = torch.tensor(np.array(self.buffer.actions), dtype=torch.float32)
         old_log_probs = torch.tensor(np.array(self.buffer.log_probs), dtype=torch.float32)
         
         # Normalize advantages to help training - Mean = 0, Std = 1
@@ -202,9 +202,9 @@ class PPO():
         self.buffer.clear()
 
 if __name__ == "__main__":
-    env = gym.make("LunarLander-v3") # Create the environment
+    env = gym.make("Pendulum-v1") # Create the environment
     obs_dim = env.observation_space.shape[0] # Get the dimension of the observation space
-    act_dim = env.action_space.n # Get the dimension of the action space
+    act_dim = env.action_space.shape[0] # Get the dimension of the action space
     ppo = PPO(obs_dim, act_dim) # Create the PPO agent
 
     # Training loop
