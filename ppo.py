@@ -116,7 +116,7 @@ class RolloutBuffer():
         return adv, ret
 
 class PPO():
-    def __init__(self, obs_dim, act_dim, learning_rate=3e-4):
+    def __init__(self, obs_dim, act_dim, learning_rate=1e-4):
         self.ac = ActorCritic(obs_dim, act_dim) # Create instance of ActorCritic
         self.buffer = RolloutBuffer() # Create instance of RolloutBuffer
         self.optimizer = optim.Adam(self.ac.parameters(), lr=learning_rate)  # Create optimizer
@@ -129,7 +129,7 @@ class PPO():
     def store_transition(self, obs, action, log_prob, reward, done, value): # Stores the transition in the buffer
         self.buffer.store(obs, action, log_prob, reward, done, value)
 
-    def update(self, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
+    def update(self, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=128): 
         """
         By the time we call update, we've already collected a bunch of experience and stored it in the buffer.
         Now we need to use that experience to update the network weights.
