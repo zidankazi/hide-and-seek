@@ -127,5 +127,59 @@ class PPO():
     def store_transition(self, obs, action, log_prob, reward, done, value): # Stores the transition in the buffer
         self.buffer.store(obs, action, log_prob, reward, done, value)
 
-    def update(self, last_obs, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64):
-        # TODO
+    def update(self, last_obs, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
+        """
+        Docstring TODO
+        """
+        last_obs_t = torch.tensor(last_obs, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad(): 
+            _, last_value = self.ac(last_obs_t) # Calls forward, puts values in last_value
+            last_value = last_value.item() # Convert tensor to python float
+        advantages, returns = self.buffer.compute_returns(last_value, gamma, lam)
+
+        # Convert the buffer lists to PyTorch tensors
+        obs = torch.tensor(np.array(self.buffer.obs), dtype=torch.float32)
+        actions = torch.tensor(np.array(self.buffer.actions), dtype=torch.long)
+        old_log_probs = torch.tensor(np.array(self.buffer.log_probs), dtype=torch.float32)
+        
+        # Normalize advantages to help training - Mean = 0, Std = 1
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # Training loop
+        n = len(obs)
+        for _ in range(update_epochs):
+            indices = np.random.permutation(n)    # Shuffle all indices randomly
+            for start in range(0, n, batch_size): # Step through in chunks of 64 
+                end = start + batch_size
+                idx = indices[start:end]          # grab one mini-batch of random indices
+
+                # Get mini-batch of data
+                obs_batch = obs[idx]
+                actions_batch = actions[idx]
+                old_log_probs_batch = old_log_probs[idx]
+                advantages_batch = advantages[idx]
+                returns_batch = returns[idx]
+
+                # Re-evaluate old actions with current network weights
+                log_probs, entropy, values = self.ac.evaluate(obs_batch, actions_batch)
+
+                # Calculate PPO loss
+                ratio = torch.exp(log_probs - old_log_probs_batch)
+                # Clip the ratio to be between 1 - clip_eps and 1 + clip_eps
+                clip_adv = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages_batch
+                # Policy loss = -min(ratio * advantages, clip_adv)
+                policy_loss = -torch.min(ratio * advantages_batch, clip_adv).mean()
+                # Value loss = MSE loss between network's value estimate and the expected return
+                value_loss = nn.functional.mse_loss(values, returns_batch)
+
+                # Total loss
+                loss = policy_loss + value_coef * value_loss - entropy_coef * entropy.mean()
+
+                # Optimize the network by calculating the gradients and updating the weights
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.ac.parameters(), 0.5) # Cap the gradients at 0.5 to prevent the network from exploding
+                # Update the weights
+                self.optimizer.step()
+
+        self.buffer.clear()
