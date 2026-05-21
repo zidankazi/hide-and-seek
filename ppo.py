@@ -228,6 +228,5 @@ if __name__ == "__main__":
 
         # Update the network
         ppo.update(obs)
-        
-    print(f"Steps: {steps_done}") # Add some printing to see the agent learning
+        print(f"Steps: {steps_done}")
     env.close() # Close the environment
