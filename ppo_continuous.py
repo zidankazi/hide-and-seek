@@ -130,7 +130,7 @@ class PPO():
     def select_action(self, obs): # Agent recieves an observation and needs to pick an action
         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0) # Convert the observations numpy array to a tensor for PyTorch
         action, log_prob, value = self.ac.act(obs_t)
-        return action.item(), log_prob.item(), value.item() # .item() strips the tensor wrapper so it returns a plain Python number
+        return action.squeeze(0).numpy(), log_prob.item(), value.item() # .item() strips the tensor wrapper so it returns a plain Python number
 
     def store_transition(self, obs, action, log_prob, reward, done, value): # Stores the transition in the buffer
         self.buffer.store(obs, action, log_prob, reward, done, value)
@@ -156,7 +156,7 @@ class PPO():
 
         # Convert the buffer lists to PyTorch tensors
         obs = torch.tensor(np.array(self.buffer.obs), dtype=torch.float32)
-        actions = torch.tensor(np.array(self.buffer.actions), dtype=torch.long)
+        actions = torch.tensor(np.array(self.buffer.actions), dtype=float32)
         old_log_probs = torch.tensor(np.array(self.buffer.log_probs), dtype=torch.float32)
         
         # Normalize advantages to help training - Mean = 0, Std = 1
