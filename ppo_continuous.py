@@ -20,30 +20,36 @@ class ActorCritic(nn.Module):
         )
         self.policy_head = nn.Linear(128, act_dim)
         self.value_head = nn.Linear(128, 1)
+        
+        # When picking actions, the agent samples from a normal distribution.
+        # This controls how spread out that distribution is. It starts wide (exploratory) and shrinks as it learns.
+        self.log_std = nn.Parameter(torch.zeros(act_dim)) 
 
     def forward(self, x):
         # Takes the game state, runs it through the brain, returns a decision and assessment
         features = self.shared(x)
-        logits = self.policy_head(features) # Scores for each action
+        mean = self.policy_head(features) # Scores for each action
         value = self.value_head(features).squeeze(-1) # Value of the current state (squeezed to remove the last dimension)
-        return logits, value
+        return mean, value
 
-    def act(self, obs): 
-        # Forward gives raw logits (scores for each action)
-        # Act picks an action from those scores at random
-        logits, value = self.forward(obs)
-        dist = Categorical(logits=logits) # creates a probability distribution from raw scores
-        action = dist.sample() # Randomly picks an action based on the probabilities
-        log_prob = dist.log_prob(action) # Tells us the log probability of the picked action (needed later for PPO math)
+    def act(self, obs):
+        # Forward gives the mean (center of the bell curve) for each action dimension
+        # Act samples a continuous action from that bell curve
+        mean, value = self.forward(obs)
+        std = torch.exp(self.log_std) # Convert log_std to std (always positive)
+        dist = Normal(mean, std) # Creates a bell curve centered on the mean with width std
+        action = dist.sample() # Randomly picks a value from the bell curve
+        log_prob = dist.log_prob(action).sum(-1) # Log probability of the picked action (summed across action dimensions, needed for PPO math)
         return action, log_prob, value
 
     def evaluate(self, obs, actions):
         # Re-evaluates old decisions with current network weights
         # "What do I think about those past actions now?"
-        logits, values = self.forward(obs)
-        dist = Categorical(logits=logits)
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy() # entropy = uniformity, high entropy = high uniformity = info is spread out evenly and randomly
+        mean, values = self.forward(obs)
+        std = torch.exp(self.log_std) # Convert log_std to std (always positive)
+        dist = Normal(mean, std) # Rebuild the bell curve with current weights
+        log_probs = dist.log_prob(actions).sum(-1) # Log probability of the old actions under the new bell curve (summed across action dimensions)
+        entropy = dist.entropy().sum(-1) # entropy = uniformity, high entropy = high uniformity = info is spread out evenly and randomly
         return log_probs, entropy, values
 
 class RolloutBuffer():
