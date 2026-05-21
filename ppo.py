@@ -203,7 +203,7 @@ if __name__ == "__main__":
 
     # Training loop
     rollout_steps = 2048    # How many steps to collect before each update
-    total_timesteps = 200_000 # Total number of steps to train for
+    total_timesteps = 500_000 # Total number of steps to train for
     steps_done = 0
     obs, _ = env.reset()
     done = False
