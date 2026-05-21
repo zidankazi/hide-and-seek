@@ -202,7 +202,7 @@ if __name__ == "__main__":
     ppo = PPO(obs_dim, act_dim) # Create the PPO agent
 
     # Training loop
-    rollout_steps = 2048    # How many steps to collect before each update
+    rollout_steps = 4096    # How many steps to collect before each update
     total_timesteps = 500_000 # Total number of steps to train for
     steps_done = 0
     obs, _ = env.reset()
