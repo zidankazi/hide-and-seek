@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from torch.distributions import Categorical 
 import torch.optim as optim
-import gymnasium as gym # for CartPole-v1 environment
+import gymnasium as gym # For training environment
 
 # PPO needs a brain that does two things when it sees a state:
 # Actor: "What should I do?" -> Outputs a probability for each action
@@ -196,14 +196,14 @@ class PPO():
         self.buffer.clear()
 
 if __name__ == "__main__":
-    env = gym.make("CartPole-v1") # Create the environment
+    env = gym.make("LunarLander-v3") # Create the environment
     obs_dim = env.observation_space.shape[0] # Get the dimension of the observation space
     act_dim = env.action_space.n # Get the dimension of the action space
     ppo = PPO(obs_dim, act_dim) # Create the PPO agent
 
     # Training loop
     rollout_steps = 2048    # How many steps to collect before each update
-    total_timesteps = 500_000 # Total number of steps to train for
+    total_timesteps = 1_000_000 # Total number of steps to train for
     steps_done = 0
     obs, _ = env.reset()
     done = False
