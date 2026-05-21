@@ -129,7 +129,7 @@ class PPO():
     def store_transition(self, obs, action, log_prob, reward, done, value): # Stores the transition in the buffer
         self.buffer.store(obs, action, log_prob, reward, done, value)
 
-    def update(self, last_obs, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
+    def update(self, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
         """
         By the time we call update, we've already collected a bunch of experience and stored it in the buffer.
         Now we need to use that experience to update the network weights.
@@ -144,6 +144,8 @@ class PPO():
         with torch.no_grad(): 
             _, last_value = self.ac(last_obs_t) # Calls forward, puts values in last_value
             last_value = last_value.item() # Convert tensor to python float
+        if last_done:
+            last_value = 0
         advantages, returns = self.buffer.compute_returns(last_value, gamma, lam)
 
         # Convert the buffer lists to PyTorch tensors
@@ -201,7 +203,7 @@ if __name__ == "__main__":
 
     # Training loop
     rollout_steps = 2048    # How many steps to collect before each update
-    total_timesteps = 100_000
+    total_timesteps = 200_000 # Total number of steps to train for
     steps_done = 0
     obs, _ = env.reset()
     done = False
@@ -231,7 +233,8 @@ if __name__ == "__main__":
                 obs, _ = env.reset()
 
         # Update the network
-        ppo.update(obs)
+        # We pass done because if the episode ends, there's no future value to estimate. So we override the last value to 0 in the update method.
+        ppo.update(obs, done)
         if episode_returns:
             mean_return = np.mean(episode_returns)
             print(f"Steps: {steps_done} | Episodes: {len(episode_returns)} | Mean Return: {mean_return:.1f}")
