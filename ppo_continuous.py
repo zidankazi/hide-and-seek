@@ -216,6 +216,7 @@ if __name__ == "__main__":
     done = False
     episode_return = 0
     episode_returns = []
+    best_mean_return = float("-inf") # Tracks the best mean return seen so far
     while steps_done < total_timesteps:
         # Collect "rollout_steps" number of steps
         for _ in range(rollout_steps):
@@ -244,10 +245,13 @@ if __name__ == "__main__":
         ppo.update(obs, done)
         if episode_returns:
             mean_return = np.mean(episode_returns)
-            print(f"Steps: {steps_done} | Episodes: {len(episode_returns)} | Mean Return: {mean_return:.1f}")
+            # Only save the policy when it beats our best, so divergence can't overwrite a good run
+            improved = mean_return > best_mean_return
+            if improved:
+                best_mean_return = mean_return
+                torch.save(ppo.ac.state_dict(), "policy.pt")
+            tag = " (saved best)" if improved else ""
+            print(f"Steps: {steps_done} | Episodes: {len(episode_returns)} | Mean Return: {mean_return:.1f}{tag}")
             episode_returns = []
-
-        # Save the policy every update so we never lose progress
-        torch.save(ppo.ac.state_dict(), "policy.pt")
 
     env.close() # Close the environment
