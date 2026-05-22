@@ -72,3 +72,81 @@ class HideAndSeekEnv(gym.Env):
 
         # Step counter, used to cap episode length at MAX_STEPS
         self.steps = 0
+
+    def _get_obs(self):
+        # Builds the 6-number observation vector the agent sees each step
+        # Positions normalized to [-1, 1], velocities scaled down by a rough max
+        half = self.ARENA_SIZE / 2
+        max_vel = 300 # rough cap so velocities land in [-1, 1] most of the time
+        obs = np.array([
+            (self.agent_body.position.x - half) / half,
+            (self.agent_body.position.y - half) / half,
+            self.agent_body.velocity.x / max_vel,
+            self.agent_body.velocity.y / max_vel,
+            (self.goal_pos[0] - half) / half,
+            (self.goal_pos[1] - half) / half,
+        ], dtype=np.float32)
+        return np.clip(obs, -1.0, 1.0)
+
+    def reset(self, seed=None, options=None):
+        # Standard gym contract: returns (obs, info) for the start of a new episode
+        super().reset(seed=seed) # seeds self.np_random for reproducibility
+
+        # Teleport agent back to center with zero velocity
+        self.agent_body.position = (self.ARENA_SIZE / 2, self.ARENA_SIZE / 2)
+        self.agent_body.velocity = (0, 0)
+        self.steps = 0
+        return self._get_obs(), {}
+
+    def step(self, action):
+        # Standard gym contract: returns (obs, reward, terminated, truncated, info)
+
+        # Convert the network's [-1, 1] output into actual physics force
+        fx = float(action[0]) * self.FORCE_SCALE
+        fy = float(action[1]) * self.FORCE_SCALE
+        self.agent_body.apply_force_at_local_point((fx, fy))
+
+        # Advance physics by one frame (1/60th of a second)
+        self.space.step(1 / 60)
+        self.steps += 1
+
+        # Reward: dense negative distance to goal, big bonus on arrival
+        # Dense rewards help PPO learn way faster than sparse ones
+        dx = self.agent_body.position.x - self.goal_pos[0]
+        dy = self.agent_body.position.y - self.goal_pos[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        reward = -dist / self.ARENA_SIZE # roughly in [-1, 0] per step
+
+        # Terminated = the task is done (goal reached). Truncated = ran out of time
+        terminated = dist < self.AGENT_RADIUS + 12 # close enough counts as reached
+        if terminated:
+            reward += 10.0
+        truncated = self.steps >= self.MAX_STEPS
+
+        return self._get_obs(), reward, terminated, truncated, {}
+
+    def render(self):
+        if self.renderer is None:
+            return
+        agents = [{
+            "pos": (self.agent_body.position.x, self.agent_body.position.y),
+            "vel": (self.agent_body.velocity.x, self.agent_body.velocity.y),
+            "role": "hider",
+            "radius": self.AGENT_RADIUS,
+        }]
+        info = {
+            "phase": "PLAY",
+            "episode": 0,
+            "step": self.steps,
+            "max_steps": self.MAX_STEPS,
+            "prep_fraction": 0.0,
+            "hiders": 1,
+            "seekers": 0,
+            "reward": 0.0,
+        }
+        self.renderer.render(agents=agents, walls=self.walls, goal_pos=self.goal_pos, info=info)
+
+    def close(self):
+        if self.renderer is not None:
+            self.renderer.close()
+            self.renderer = None

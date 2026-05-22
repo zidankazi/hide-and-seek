@@ -202,7 +202,8 @@ class PPO():
         self.buffer.clear()
 
 if __name__ == "__main__":
-    env = gym.make("Pendulum-v1") # Create the environment
+    from env import HideAndSeekEnv
+    env = HideAndSeekEnv() # Create the environment
     obs_dim = env.observation_space.shape[0] # Get the dimension of the observation space
     act_dim = env.action_space.shape[0] # Get the dimension of the action space
     ppo = PPO(obs_dim, act_dim) # Create the PPO agent
@@ -245,4 +246,8 @@ if __name__ == "__main__":
             mean_return = np.mean(episode_returns)
             print(f"Steps: {steps_done} | Episodes: {len(episode_returns)} | Mean Return: {mean_return:.1f}")
             episode_returns = []
+
+        # Save the policy every update so we never lose progress
+        torch.save(ppo.ac.state_dict(), "policy.pt")
+
     env.close() # Close the environment
