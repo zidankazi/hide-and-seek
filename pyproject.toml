@@ -9,6 +9,7 @@ dependencies = [
     "gymnasium>=0.29",
     "pymunk>=7.0",
     "pygame>=2.5",
+    "pettingzoo>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,9 @@ dev = [
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = []
 
 [tool.ruff]
 line-length = 100

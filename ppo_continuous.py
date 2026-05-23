@@ -202,7 +202,7 @@ class PPO():
         self.buffer.clear()
 
 if __name__ == "__main__":
-    from env import HideAndSeekEnv
+    from env_nav import HideAndSeekEnv
     env = HideAndSeekEnv() # Create the environment
     obs_dim = env.observation_space.shape[0] # Get the dimension of the observation space
     act_dim = env.action_space.shape[0] # Get the dimension of the action space

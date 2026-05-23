@@ -1,5 +1,5 @@
 import torch
-from env import HideAndSeekEnv
+from env_nav import HideAndSeekEnv
 from ppo_continuous import ActorCritic
 
 # Load the trained policy and watch it play

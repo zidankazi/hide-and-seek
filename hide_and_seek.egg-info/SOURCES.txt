@@ -1,0 +1,6 @@
+pyproject.toml
+hide_and_seek.egg-info/PKG-INFO
+hide_and_seek.egg-info/SOURCES.txt
+hide_and_seek.egg-info/dependency_links.txt
+hide_and_seek.egg-info/requires.txt
+hide_and_seek.egg-info/top_level.txt
