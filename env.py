@@ -27,6 +27,7 @@ class TagEnv(ParallelEnv):
     ARENA_SIZE = 600
     AGENT_RADIUS = 18
     FORCE_SCALE = 1500
+    MAX_VEL = 300                     # px/sec, body velocity is clamped to this each step
     MAX_STEPS = 240                   # paper uses ~240
     MIN_SPAWN_DIST = 250              # min initial distance between hider and seeker
     TAG_DIST = 2 * AGENT_RADIUS + 2   # touch threshold
@@ -106,7 +107,7 @@ class TagEnv(ParallelEnv):
         opp_body = self.bodies[opponent]
         
         half = self.ARENA_SIZE / 2
-        max_vel = 300 # rough cap so velocities land in [-1, 1] most of the time
+        max_vel = self.MAX_VEL # velocity is clamped to MAX_VEL in step() so normalization is exact
         obs = np.array([
             (self_body.position.x - half) / half,
             (self_body.position.y - half) / half,
@@ -184,6 +185,17 @@ class TagEnv(ParallelEnv):
         # Advance physics one frame (1/60s). Both agents' forces are applied at once, that's the parallel bit
         self.space.step(1 / 60)
         self.steps += 1
+
+        # Clamp velocity so neither body can blow past MAX_VEL. Without this, the seeker learns
+        # to mash max thrust and rockets across the arena in a few frames, which both looks
+        # silly and makes the obs normalization (which assumes [-MAX_VEL, MAX_VEL]) inaccurate
+        for name in self.agents:
+            body = self.bodies[name]
+            vx, vy = body.velocity
+            speed = (vx * vx + vy * vy) ** 0.5
+            if speed > self.MAX_VEL:
+                scale = self.MAX_VEL / speed
+                body.velocity = (vx * scale, vy * scale)
 
         # Tag check: distance between the two body centers, measured after the physics step
         hp = self.bodies["hider"].position
