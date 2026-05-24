@@ -28,7 +28,8 @@ ppos = {name: PPO(obs_dim, act_dim) for name in env.possible_agents}
 
 # Training loop
 rollout_steps = 2048        # Steps collected per agent before each update
-total_timesteps = 1_000_000 # Total env steps to train for (per agent)
+total_timesteps = 2_000_000 # Total env steps to train for (per agent)
+entropy_coef = 0.02         # Bumped from PPO default 0.01 to keep both agents exploring longer
 steps_done = 0
 
 obs, _ = env.reset()
@@ -78,7 +79,7 @@ while steps_done < total_timesteps:
     # If the rollout ended exactly on a done step, last_done=True makes update() zero out the
     # bootstrap value so we don't accidentally credit the next episode's reset state.
     for name in env.possible_agents:
-        ppos[name].update(obs[name], done)
+        ppos[name].update(obs[name], done, entropy_coef=entropy_coef)
 
     # Log progress and save best policies per agent
     n_ep = len(episode_returns["hider"])

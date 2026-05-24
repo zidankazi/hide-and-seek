@@ -13,8 +13,11 @@ class TagEnv(ParallelEnv):
     rewards come back as dicts keyed by agent name ("hider", "seeker").
 
     Rewards are roughly zero-sum:
-        Per step:  hider +1, seeker -1
-        On tag:    hider -5, seeker +5 (one-shot bonus on top of the per-step)
+        Per step:  hider +0.01, seeker -0.01
+        On tag:    hider -0.05, seeker +0.05 (one-shot bonus on top of the per-step)
+    Scaled 100x smaller than the raw +1/-1 design so the value head only needs to predict
+    numbers in roughly the [-2.5, +2.5] range. Same relative weighting between per-step and
+    terminal so the game dynamics are unchanged.
     Episode ends on tag (termination) or after MAX_STEPS (truncation).
     """
 
@@ -188,12 +191,11 @@ class TagEnv(ParallelEnv):
         dist = ((hp.x - sp.x) ** 2 + (hp.y - sp.y) ** 2) ** 0.5
         tagged = dist < self.TAG_DIST
 
-        # Zero-sum per-step reward: +1 hider, -1 seeker every frame the hider is still alive.
-        # On tag, add an extra +5/-5 so the catch event has a bigger gradient than a normal step
-        rewards = {"hider": 1.0, "seeker": -1.0}
+        # Zero-sum per-step reward, scaled small so the value head doesn't have to predict huge numbers
+        rewards = {"hider": 0.01, "seeker": -0.01}
         if tagged:
-            rewards["hider"] -= 5.0
-            rewards["seeker"] += 5.0
+            rewards["hider"] -= 0.05
+            rewards["seeker"] += 0.05
 
         # Terminated = task ended (got tagged). Truncated = ran out of time.
         # Both flip together for both agents since the game is symmetric
