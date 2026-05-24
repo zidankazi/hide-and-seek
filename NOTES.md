@@ -80,3 +80,90 @@ Worse peak than run 1 (-60 vs -13) because PPO is stochastic — different rando
 
 ### Stage 2 status
 Pipeline is proven end-to-end: custom Gymnasium env + Pymunk physics + continuous PPO + clean renderer + save/load. The task itself is simple (point-to-point navigation) and the agent half-learned it. Could push higher with reward shaping or relative observations, but diminishing returns vs moving on to multi-agent.
+
+---
+
+## 2026-05-23 - Stage 3 begins: multi-agent tag
+
+Two agents in an empty arena. Hider tries to survive a fixed step count, seeker tries to touch the hider before time runs out. Reproducing the 0:18 mark of the OpenAI video: "they've already learned to chase and run away."
+
+### Design choices
+
+- **PettingZoo Parallel API** instead of single-agent Gymnasium. Observation/action/reward/term/trunc all come back as dicts keyed by agent name. The whole multi-agent abstraction is just "everything is a dict now."
+- **Equal speed for both agents + 240-step time limit.** Hider wins by surviving the full episode, seeker wins by tagging before then. No speed asymmetry to tune.
+- **Observations: 8 dims, absolute coords.** Self (x,y,vx,vy) + opponent (x,y,vx,vy), all normalized to [-1,1]. Will swap to ego-centric in Stage 5 when we add lidar.
+- **Paper-faithful sparse reward** (rescaled small to keep value targets manageable):
+  - Per step: hider +0.01, seeker -0.01
+  - On tag: extra +/-0.05 swing
+  - Zero-sum, episode totals around +/-2.4
+- **Two PPO policies, simultaneous training.** Each agent gets its own ActorCritic, RolloutBuffer, optimizer. From each agent's POV the other is just part of the environment. Reused the PPO class from ppo_continuous.py unchanged, only the orchestration in ppo_multi.py is new.
+- **Single env, both agents step at once.** Each iteration: query both networks, env.step(actions_dict), store into both buffers, update both after each rollout, save best per agent.
+
+### Files
+
+- env.py is now the multi-agent TagEnv (renamed Stage 2 nav env to env_nav.py).
+- ppo_multi.py for the dual-agent training loop.
+- watch_random.py and watch_trained.py for eyeballing the env and the trained policies.
+
+---
+
+## 2026-05-23 - Training run 1: predicted collapse
+
+2M steps, ~1.5 hours. Followed the expected naive-2-policy trajectory exactly:
+
+- 0-100k: hider +2.4, seeker -2.4 (random play baseline).
+- 100k-524k: seeker steadily learns to chase. Hider returns drop to +1.2 (catch rate ~50%).
+- 524k-2M: regression. By end of training both policies are back at random-baseline returns.
+
+**Why it collapses:** non-stationarity. Seeker learns to chase pattern A, hider learns to evade pattern A. Once hider's evasion is good enough that the seeker stops getting tag signals, the seeker's policy drifts and forgets. Both regress to random.
+
+Save-best logic kept the peak: seeker.pt is from the 524k iteration. hider.pt is from iteration 1 (where it won by default against the clueless seeker), so it never actually learned anything.
+
+This is the failure mode the OpenAI paper explicitly fixes with self-play. Stage 4 territory.
+
+---
+
+## 2026-05-23 - Speed bug + velocity cap
+
+Watched seeker.pt and noticed the seeker was crossing the arena in ~0.3 seconds. Physics wasn't broken, just nothing capping velocity.
+
+Math: FORCE_SCALE=1500, damping=0.5/sec, mass=1. Per-step velocity gain = 25, per-step decay = 1.15%. Terminal velocity = 25/0.0115 ~ 2000 px/sec. Arena is 600 px wide.
+
+The seeker had learned to mash max thrust constantly (locally optimal: catch fast = less per-step penalty). Added a velocity clamp inside env.step() after the physics step:
+
+```
+for name in self.agents:
+    body = self.bodies[name]
+    vx, vy = body.velocity
+    speed = (vx*vx + vy*vy) ** 0.5
+    if speed > MAX_VEL:
+        scale = MAX_VEL / speed
+        body.velocity = (vx*scale, vy*scale)
+```
+
+MAX_VEL=300 matches the obs normalization exactly, so velocity components are now precisely in [-1, 1] without relying on the np.clip safety net.
+
+**Unexpected side effect: training got 5-6x faster.** Pymunk seems to burn a lot of cycles resolving collisions when bodies hit walls at 2000 px/sec. With cap=300, the same 2M-step run took 14 minutes instead of 1.5 hours.
+
+---
+
+## 2026-05-23 - Retrain + Stage 3 done
+
+Same training setup, just the velocity-capped env. Same collapse pattern but with a lower peak:
+- Peak: hider +1.7, seeker -1.7 at step 251k (catch rate ~29%).
+- Final state: returns drifted back to +2.4 / -2.4 (random baseline).
+
+Lower peak because random catch rate dropped from ~15% to ~5% with capped velocity. Less serendipity = less reward signal = harder bootstrap. Expected tradeoff for the visual win.
+
+### Watching the trained policies
+
+Loaded hider.pt + seeker.pt in watch_trained.py (deterministic actions = mean of the policy distribution):
+- Two runs of ~20-30 episodes gave wildly different catch rates: 5/11 (45%) then 1/30 (3%).
+- Across both, ~15% catch rate. Brittle policy, depends heavily on spawn config.
+- Visually: seeker clearly chases (moves with intent toward the hider), hider drifts without real evasion (since hider.pt is iteration 1).
+
+### Stage 3 status
+
+Reproduced the 0:18 mark of the OpenAI video: a seeker that chases. Hider evasion is the next thing to fix, and that's exactly what self-play (Stage 4) addresses. The non-stationarity in Stage 3 is what prevents the hider from ever getting a stable training signal in the first place.
+
+Calling Stage 3 done. Next: self-play with policy snapshotting and opponent sampling.
