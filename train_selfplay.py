@@ -7,8 +7,10 @@ Per iteration:
   Rollout A: live hider plays vs a sampled-frozen seeker. Only the hider stores
              transitions and updates. New frozen seeker is sampled at each env reset.
   Rollout B: mirror - live seeker vs sampled-frozen hider. Only the seeker updates.
-  Every SNAPSHOT_EVERY iterations, deep-copy each live policy's state_dict and append
-  to its own pool so future opponents have access to this version.
+  After each rollout, if the live policy beat its all-time best mean return, deep-copy
+  its state_dict into its own pool so future opponents include this improved version.
+  Snapshot-on-improvement (instead of every K iters) keeps the pool a quality ladder
+  rather than a time series of mostly-untrained noise.
 """
 
 import copy
@@ -25,7 +27,10 @@ from ppo_continuous import PPO, ActorCritic
 ROLLOUT_STEPS = 2048
 TOTAL_TIMESTEPS = 2_000_000   # per agent (so total env steps is ~2x this)
 ENTROPY_COEF = 0.02
-SNAPSHOT_EVERY = 10           # iterations between snapshots
+# Note: SNAPSHOT_EVERY was removed in v2. Time-based snapshotting filled the pool with
+# 97% copies of untrained policies, so opponents were mostly noise. Now we snapshot only
+# when the live policy improves (same trigger as save-best), so the pool is a quality
+# ladder of progressively better past selves.
 
 
 # ---- setup ----
@@ -132,36 +137,39 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
         # (or zero it out if the rollout ended exactly on a done).
         live[learner].update(obs[learner], done, entropy_coef=ENTROPY_COEF)
 
-    # ---- snapshot ----
-    if iteration % SNAPSHOT_EVERY == 0:
-        for name in env.possible_agents:
-            pools[name].append(copy.deepcopy(live[name].ac.state_dict()))
-
-    # ---- logging + save-best (per role, same shape as train_multi.py) ----
+    # ---- logging + save-best + snapshot-on-improvement ----
     # Build the log line piece by piece so we can skip roles that didn't finish any
-    # episodes this iteration (rare, but possible if rollouts somehow ran with zero
-    # terminations or truncations).
+    # episodes this iteration (rare, but possible).
     parts = [f"Iter {iteration}", f"Steps {min(steps_done.values())}"]
-    # Pool sizes climb by 1 every SNAPSHOT_EVERY iterations. Eyeballing this in the log
-    # is a quick sanity check that snapshotting is firing.
     parts.append(f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}")
+
+    # First pass: figure out which roles improved this iteration and save their .pt.
+    # We need to know BEFORE snapshotting whether any role improved, because we want
+    # paired snapshots: if EITHER role improves, BOTH pools get a snapshot.
+    # Why paired: the hider's metric saturates at +2.4 (max possible return = no catches
+    # x max per-step), so the hider can never visibly "improve" once it hits the cap.
+    # But it IS learning implicitly as the seeker pool gets harder. Pairing means each
+    # time the seeker levels up, the current hider gets snapshotted too - capturing
+    # "the hider that's surviving against this generation of seekers."
+    improved_any = False
     for name in env.possible_agents:
         if not episode_returns[name]:
             continue
         mean_r = float(np.mean(episode_returns[name]))
-        # Save-best, same idea as Stage 2/3: only overwrite the .pt when we beat the
-        # all-time best mean return for this role. Note that in self-play this is a bit
-        # noisy because difficulty changes as the opponent pool grows - a high score
-        # vs early easy opponents can lock in the .pt and rarely get overwritten later.
-        # Good enough for now, can revisit if it bites.
         improved = mean_r > best_mean_return[name]
         if improved:
             best_mean_return[name] = mean_r
             torch.save(live[name].ac.state_dict(), f"{name}.pt")
+            improved_any = True
         tag = "*" if improved else " "
         parts.append(f"{name}={mean_r:+6.3f}{tag} ({len(episode_returns[name])}ep)")
-        # Reset the list so next iteration only logs its own episodes
         episode_returns[name] = []
+
+    # Second pass: paired snapshot. If anyone improved, snapshot everyone.
+    if improved_any:
+        for name in env.possible_agents:
+            pools[name].append(copy.deepcopy(live[name].ac.state_dict()))
+
     print(" | ".join(parts))
 
 env.close()

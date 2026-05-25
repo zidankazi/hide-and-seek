@@ -14,10 +14,11 @@ class TagEnv(ParallelEnv):
 
     Rewards are roughly zero-sum:
         Per step:  hider +0.01, seeker -0.01
-        On tag:    hider -0.05, seeker +0.05 (one-shot bonus on top of the per-step)
-    Scaled 100x smaller than the raw +1/-1 design so the value head only needs to predict
-    numbers in roughly the [-2.5, +2.5] range. Same relative weighting between per-step and
-    terminal so the game dynamics are unchanged.
+        On tag:    hider -1.0,  seeker +1.0 (one-shot bonus on top of the per-step)
+    Bumped from ±0.05 to ±1.0 after Stage 4 v1: with the old scaling the catch was ~2% of
+    total signal vs ~98% per-step, so PPO barely saw the catch gradient and self-play
+    plateaued. ±1.0 makes a catch worth ~30% of the total possible per-episode return,
+    so the policy actually gets pushed toward (or away from) catches.
     Episode ends on tag (termination) or after MAX_STEPS (truncation).
     """
 
@@ -203,11 +204,13 @@ class TagEnv(ParallelEnv):
         dist = ((hp.x - sp.x) ** 2 + (hp.y - sp.y) ** 2) ** 0.5
         tagged = dist < self.TAG_DIST
 
-        # Zero-sum per-step reward, scaled small so the value head doesn't have to predict huge numbers
+        # Zero-sum per-step reward. Catch bonus is ±1.0 (vs the original ±0.05) so the
+        # catch event is a meaningful fraction of the total per-episode return - otherwise
+        # PPO's gradient is swamped by the per-step ±0.01 and self-play can't learn.
         rewards = {"hider": 0.01, "seeker": -0.01}
         if tagged:
-            rewards["hider"] -= 0.05
-            rewards["seeker"] += 0.05
+            rewards["hider"] -= 1.0
+            rewards["seeker"] += 1.0
 
         # Terminated = task ended (got tagged). Truncated = ran out of time.
         # Both flip together for both agents since the game is symmetric
