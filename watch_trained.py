@@ -1,6 +1,6 @@
 """
 Watch the trained hider and seeker policies play each other.
-Loads hider.pt and seeker.pt (best-saved policies from ppo_multi.py training) and renders
+Loads hider.pt and seeker.pt (best-saved policies from train_multi.py training) and renders
 them playing the tag env. Quit by closing the window.
 
 Uses the mean of each policy's distribution instead of sampling, so behavior is deterministic.
