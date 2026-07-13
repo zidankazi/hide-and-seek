@@ -167,3 +167,48 @@ Loaded hider.pt + seeker.pt in watch_trained.py (deterministic actions = mean of
 Reproduced the 0:18 mark of the OpenAI video: a seeker that chases. Hider evasion is the next thing to fix, and that's exactly what self-play (Stage 4) addresses. The non-stationarity in Stage 3 is what prevents the hider from ever getting a stable training signal in the first place.
 
 Calling Stage 3 done. Next: self-play with policy snapshotting and opponent sampling.
+
+---
+
+## 2026-07-13 — Stage 4: self-play (fixes the collapse)
+
+Built `train_selfplay.py` to kill Stage 3's non-stationarity collapse. Core idea: never train a live agent against the live opponent. Each iteration:
+- **Rollout A:** live hider vs a *frozen* seeker sampled from a pool of past seeker snapshots. Only the hider stores transitions and updates.
+- **Rollout B:** mirror — live seeker vs a frozen hider from the hider pool.
+
+A frozen opponent is stationary within an episode, so each learner sees a stable target instead of a co-adapting one. A new frozen opponent is resampled at every env reset (~8–10 per rollout) for generalization across the pool.
+
+### Two design decisions that mattered
+
+1. **Snapshot on improvement, not on a timer (v2).** v1 snapshotted every K iters; the pool filled with ~97% copies of barely-trained noise, so opponents were mostly random and self-play plateaued. Switched to snapshotting only when the live policy beats its all-time best — same trigger as save-best — so the pool is a *quality ladder* of progressively stronger past selves.
+2. **Catch bonus ±0.05 → ±1.0.** With the old scaling a catch was ~2% of total episode signal vs ~98% per-step ±0.01, so PPO's gradient barely saw the catch event. ±1.0 makes a catch worth ~30% of max per-episode return, so the policy actually gets pushed toward/away from catches.
+
+### Run: 977 iterations, 2M steps/agent
+
+- Pools grew hider 1→7, seeker 1→7 (paired snapshotting: if either role improves, both get snapshotted, since the hider metric saturates at +2.4 and can't visibly "improve" on its own).
+- Seeker best return climbed −2.4 (random) → −0.942, **with real late gains at iter 420 and iter 827 (near the very end)**. No regression to baseline.
+
+**The headline: no collapse.** Stage 3 peaked at ~251k steps then drifted back to random by 2M. Stage 4 held — and improved — its gains across the full run. That's the whole point of self-play, confirmed.
+
+### Eval: catch rate + cross-matchups (200 fixed-seed episodes, deterministic actions)
+
+Head-to-head trained-vs-trained: **30.5% catch rate** vs Stage 3's 12.5%. But catch rate alone conflates "seeker got better" with "hider got worse." Cross-matchups isolate it:
+
+| hider | seeker | catch rate | steps-to-catch |
+|-------|--------|-----------|----------------|
+| Stage 3 | **Stage 4** | 29.0% | 124 |
+| Stage 4 | **Stage 4** | 30.5% | **149** |
+| Stage 3 | Stage 3 | 12.5% | 132 |
+| Stage 4 | Stage 3 | 13.5% | 129 |
+
+Reading it:
+- **Seeker learned a lot** — ~doubled its catch rate (12.5% → ~29–30%) against *any* hider. This is the big winner.
+- **Hider learned modest, real evasion — delay, not escape.** Against the strong Stage 4 seeker it's caught at the same rate as the clueless Stage 3 hider but survives ~20% longer when caught (149 vs 124 steps). It learned to drag out the chase, not to get away.
+
+### Why the hider only delays
+
+In an empty arena with equal speeds, the hider fundamentally *cannot* escape a competent seeker — geometry doesn't allow it. It can only prolong survival. Decisive evasion requires **tools**: walls to break line-of-sight, movable boxes to build cover. That's Stage 5. So Stage 4 fixed the training-stability problem (the actual goal), and the hider hit the ceiling of what's achievable in an empty box.
+
+### Stage 4 status
+
+Done. Self-play with a quality-ladder opponent pool eliminates the non-stationarity collapse: both policies now improve and hold. Eval scripts added (`eval_headless.py`, `eval_cross.py`). Next: Stage 5 — the real hide-and-seek environment (walls, movable + lockable boxes, lidar, ego-centric observations) where tool-use can actually emerge.

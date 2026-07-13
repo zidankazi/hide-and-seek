@@ -6,3 +6,5 @@ runs/
 checkpoints/
 *.mp4
 .DS_Store
+# local safety copies of overwritten policies
+stage3_backup/
