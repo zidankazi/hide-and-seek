@@ -30,6 +30,7 @@ class HideAndSeekEnv(ParallelEnv):
     MAX_VEL = 300
     MAX_STEPS = 240
     TAG_DIST = 2 * AGENT_RADIUS + 2      # only used by the temporary 5a touch-tag reward
+    MIN_SPAWN_DIST = 250                  # min hider/seeker separation at spawn (open layout)
 
     # --- Stage 5 additions ---
     PREP_FRACTION = 0.4                  # first 40% of the episode: seeker frozen, no reward
@@ -64,7 +65,17 @@ class HideAndSeekEnv(ParallelEnv):
     def PLAY_STEPS(self):
         return self.MAX_STEPS - self.PREP_STEPS
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, layout="room"):
+        """
+        layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
+            hider passively, so tool-use is optional.
+        layout="open" (Stage 5b-ii): open arena, no interior walls, 4 boxes, hider spawns in a
+            random corner. Nothing hides the hider for free — it must push+lock boxes to close
+            a corner pocket, forcing genuine fort-building (closest to the paper).
+        """
+        assert layout in ("room", "open")
+        self.layout = layout
+        self.N_BOXES = 2 if layout == "room" else 4
         self.possible_agents = ["hider", "seeker"]
         self.agents = []
         self.episode = 0
@@ -88,14 +99,16 @@ class HideAndSeekEnv(ParallelEnv):
             self.shapes[name] = shape
             self.space.add(body, shape)
 
-        # --- walls: arena edge + interior room walls ---
+        # --- walls: arena edge (+ interior room walls only in the "room" layout) ---
         edge = self.ARENA_SIZE - 10
         self.walls = [
             [(10, 10), (edge, 10)],
             [(edge, 10), (edge, edge)],
             [(edge, edge), (10, edge)],
             [(10, edge), (10, 10)],
-        ] + [list(w) for w in self.ROOM_WALLS]
+        ]
+        if self.layout == "room":
+            self.walls += [list(w) for w in self.ROOM_WALLS]
         for start, end in self.walls:
             seg = pymunk.Segment(self.space.static_body, start, end, 6)
             seg.elasticity = 0.4
@@ -269,27 +282,44 @@ class HideAndSeekEnv(ParallelEnv):
         self.box_lock_owner = [None] * self.N_BOXES
         self._prev_lock = {name: False for name in self.possible_agents}
 
-        # Hider inside the room.
-        hx = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
-        hy = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
+        margin = self.AGENT_RADIUS + 20
+        lo, hi = margin, self.ARENA_SIZE - margin
+
+        if self.layout == "room":
+            # Hider inside the room; seeker outside; boxes inside near the hider.
+            hx = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
+            hy = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
+            while True:
+                sx = self.np_random.uniform(300, hi)
+                sy = self.np_random.uniform(300, hi)
+                if sx > 270 or sy > 270:  # outside the 240x240 room
+                    break
+            box_spawn = lambda: (self.np_random.uniform(self.ROOM_LO, self.ROOM_HI),
+                                 self.np_random.uniform(self.ROOM_LO, self.ROOM_HI))
+        else:
+            # Open arena. Hider spawns in a random corner pocket (near two arena walls it can
+            # complete into cover); boxes scatter mid-arena; seeker spawns anywhere far off.
+            corner = self.np_random.integers(4)
+            cx = lo if corner in (0, 2) else hi
+            cy = lo if corner in (0, 1) else hi
+            hx = cx + (1 if cx == lo else -1) * self.np_random.uniform(0, 90)
+            hy = cy + (1 if cy == lo else -1) * self.np_random.uniform(0, 90)
+            while True:
+                sx = self.np_random.uniform(lo, hi)
+                sy = self.np_random.uniform(lo, hi)
+                if ((sx - hx) ** 2 + (sy - hy) ** 2) ** 0.5 >= self.MIN_SPAWN_DIST:
+                    break
+            mid_lo, mid_hi = self.ARENA_SIZE * 0.25, self.ARENA_SIZE * 0.75
+            box_spawn = lambda: (self.np_random.uniform(mid_lo, mid_hi),
+                                 self.np_random.uniform(mid_lo, mid_hi))
+
         self.bodies["hider"].position = (hx, hy)
         self.bodies["hider"].velocity = (0, 0)
-
-        # Seeker outside the room (clearly past the room's bottom-right extent).
-        margin = self.AGENT_RADIUS + 20
-        hi = self.ARENA_SIZE - margin
-        while True:
-            sx = self.np_random.uniform(300, hi)
-            sy = self.np_random.uniform(300, hi)
-            if sx > 270 or sy > 270:  # outside the 240x240 room
-                break
         self.bodies["seeker"].position = (sx, sy)
         self.bodies["seeker"].velocity = (0, 0)
 
-        # Boxes spread inside the room, near the hider, non-overlapping-ish.
         for i, body in enumerate(self.box_bodies):
-            bx = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
-            by = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
+            bx, by = box_spawn()
             body.position = (bx, by)
             body.velocity = (0, 0)
             body.angular_velocity = 0.0

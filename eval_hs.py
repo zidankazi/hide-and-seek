@@ -15,10 +15,13 @@ import torch
 from env_hs import HideAndSeekEnv
 from ppo_continuous import ActorCritic
 
-N = int(sys.argv[1]) if len(sys.argv) > 1 else 200
-DOOR = np.array([180.0, 240.0])  # doorway center (gap x in [150,210] at y=240)
+# Usage: python eval_hs.py [layout=room|open] [N]
+LAYOUT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].isdigit() else "room"
+N = int([a for a in sys.argv[1:] if a.isdigit()][0]) if any(a.isdigit() for a in sys.argv[1:]) else 200
+PREFIX = "hs" if LAYOUT == "room" else "hs_open"
+DOOR = np.array([180.0, 240.0])  # room doorway center (gap x in [150,210] at y=240)
 
-env = HideAndSeekEnv()
+env = HideAndSeekEnv(layout=LAYOUT)
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
 act_dim = env.action_space(sample).shape[0]
@@ -26,7 +29,7 @@ act_dim = env.action_space(sample).shape[0]
 nets = {}
 for name in env.possible_agents:
     ac = ActorCritic(obs_dim, act_dim)
-    ac.load_state_dict(torch.load(f"hs_{name}.pt"))
+    ac.load_state_dict(torch.load(f"{PREFIX}_{name}.pt"))
     ac.eval()
     nets[name] = ac
 
@@ -75,10 +78,11 @@ hf, lock_rate, door_mean, door_min = run(disable_hider=False)
 hf_static, _, door_mean_s, _ = run(disable_hider=True)
 env.close()
 
-print(f"Trained hider vs seeker ({N} eps):")
+print(f"Trained hider vs seeker ({N} eps, layout={LAYOUT}):")
 print(f"  hidden-fraction (play phase):     {hf:.1%}")
 print(f"  episodes where a box got locked:  {lock_rate:.1%}")
-print(f"  min box->doorway dist @ prep end: mean {door_mean:.0f}px, best {door_min:.0f}px  (doorway gap ~30px)")
+if LAYOUT == "room":
+    print(f"  min box->doorway dist @ prep end: mean {door_mean:.0f}px, best {door_min:.0f}px  (doorway gap ~30px)")
 print(f"Counterfactual (hider disabled, boxes never move):")
 print(f"  hidden-fraction from walls alone: {hf_static:.1%}")
 print(f"  => hider's active contribution:   {hf - hf_static:+.1%}")

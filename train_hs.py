@@ -17,6 +17,7 @@ snapshotting captures "the hider that survives against this generation of seeker
 
 import copy
 import random
+import sys
 
 import numpy as np
 import torch
@@ -26,13 +27,17 @@ from ppo_continuous import PPO, ActorCritic
 
 
 # ---- config ----
+# layout: "room" (Stage 5b, default) or "open" (Stage 5b-ii, forces fort-building).
+LAYOUT = sys.argv[1] if len(sys.argv) > 1 else "room"
+SAVE_PREFIX = "hs" if LAYOUT == "room" else "hs_open"
 ROLLOUT_STEPS = 2048
 TOTAL_TIMESTEPS = 2_000_000   # per agent
 ENTROPY_COEF = 0.02
 
 
 # ---- setup ----
-env = HideAndSeekEnv()
+env = HideAndSeekEnv(layout=LAYOUT)
+print(f"[train_hs] layout={LAYOUT} saving to {SAVE_PREFIX}_*.pt")
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
 act_dim = env.action_space(sample).shape[0]
@@ -120,7 +125,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
         improved = mean_r > best_mean_return[name]
         if improved:
             best_mean_return[name] = mean_r
-            torch.save(live[name].ac.state_dict(), f"hs_{name}.pt")
+            torch.save(live[name].ac.state_dict(), f"{SAVE_PREFIX}_{name}.pt")
             improved_any = True
         hf = float(np.mean(hidden_frac[name])) if hidden_frac[name] else float("nan")
         tag = "*" if improved else " "
