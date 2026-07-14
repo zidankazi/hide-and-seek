@@ -36,7 +36,13 @@ class HideAndSeekEnv(ParallelEnv):
     N_BOXES = 2
     BOX_SIZE = 44                        # full side length (matches renderer's box `size`)
     BOX_MASS = 3                         # pushable by an agent but heavy enough to stack a wall
-    LOCK_DIST = AGENT_RADIUS + BOX_SIZE  # (5b) reach for locking the nearest box
+    LOCK_DIST = AGENT_RADIUS + BOX_SIZE  # reach for locking the nearest box
+
+    # Collision/query filter categories. LOS raycasts use a mask of OCCLUDER_CAT so they only
+    # "see" walls and boxes and pass straight through agents (we don't want an agent's own body
+    # blocking its view). Physics collisions are unaffected (masks stay all-ones).
+    AGENT_CAT = 0b01
+    OCCLUDER_CAT = 0b10
 
     # --- fixed map: a room in the top-left corner with one doorway ---
     # Outer walls come from the arena edge; these interior segments close off the room,
@@ -77,6 +83,7 @@ class HideAndSeekEnv(ParallelEnv):
             shape = pymunk.Circle(body, self.AGENT_RADIUS)
             shape.elasticity = 0.6
             shape.friction = 0.4
+            shape.filter = pymunk.ShapeFilter(categories=self.AGENT_CAT)
             self.bodies[name] = body
             self.shapes[name] = shape
             self.space.add(body, shape)
@@ -93,6 +100,7 @@ class HideAndSeekEnv(ParallelEnv):
             seg = pymunk.Segment(self.space.static_body, start, end, 6)
             seg.elasticity = 0.4
             seg.friction = 0.5
+            seg.filter = pymunk.ShapeFilter(categories=self.OCCLUDER_CAT)
             self.space.add(seg)
 
         # --- movable boxes ---
@@ -101,15 +109,20 @@ class HideAndSeekEnv(ParallelEnv):
         self.box_bodies = []
         self.box_shapes = []
         self.box_lock_owner = [None] * self.N_BOXES
-        box_moment = pymunk.moment_for_box(self.BOX_MASS, (self.BOX_SIZE, self.BOX_SIZE))
+        self._box_moment = pymunk.moment_for_box(self.BOX_MASS, (self.BOX_SIZE, self.BOX_SIZE))
         for _ in range(self.N_BOXES):
-            body = pymunk.Body(self.BOX_MASS, box_moment)
+            body = pymunk.Body(self.BOX_MASS, self._box_moment)
             shape = pymunk.Poly.create_box(body, (self.BOX_SIZE, self.BOX_SIZE))
             shape.elasticity = 0.1
             shape.friction = 0.7
+            shape.filter = pymunk.ShapeFilter(categories=self.OCCLUDER_CAT)
             self.box_bodies.append(body)
             self.box_shapes.append(shape)
             self.space.add(body, shape)
+
+        # Rising-edge tracking for the lock action: an agent only toggles a lock when its lock
+        # signal crosses from <=0.5 to >0.5, so holding the signal high doesn't thrash lock/unlock.
+        self._prev_lock = {name: False for name in self.possible_agents}
 
         self.render_mode = render_mode
         self.renderer = None
@@ -129,13 +142,70 @@ class HideAndSeekEnv(ParallelEnv):
         # [fx, fy, lock]. fx,fy are thrust in [-1,1]; lock>0.5 toggles a box lock (inert in 5a).
         return spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
-    def _visible(self, agent, target_body):
+    def _visible(self, agent, target_body, target_shape=None):
         """
-        Line-of-sight from `agent` to a target body. STUB for 5a: always visible.
-        5b replaces this with a raycast (space.segment_query_first) that returns False when a
-        wall or box occludes the straight line between them.
+        Line-of-sight from `agent` to a target body: cast a ray between the two centers and
+        report whether a wall or box occludes it. The ray uses OCCLUDER_CAT as its mask so it
+        ignores both agents' bodies entirely (only walls/boxes can block).
+
+        `target_shape` is the target's own shape when the target is itself an occluder (a box):
+        the ray ends at the box center and would otherwise register a hit on the box itself, so
+        a hit *on the target* counts as visible. For the opponent (not an occluder) pass None.
         """
-        return True
+        start = self.bodies[agent].position
+        end = target_body.position
+        query_filter = pymunk.ShapeFilter(mask=self.OCCLUDER_CAT)
+        hit = self.space.segment_query_first(start, end, 1, query_filter)
+        if hit is None:
+            return True
+        return hit.shape is target_shape
+
+    def _nearest_box(self, agent):
+        """Index of the box whose center is nearest the agent, and that distance."""
+        ap = self.bodies[agent].position
+        best_i, best_d = 0, float("inf")
+        for i, body in enumerate(self.box_bodies):
+            d = ((body.position.x - ap.x) ** 2 + (body.position.y - ap.y) ** 2) ** 0.5
+            if d < best_d:
+                best_i, best_d = i, d
+        return best_i, best_d
+
+    def _set_box_dynamic(self, i):
+        body = self.box_bodies[i]
+        body.body_type = pymunk.Body.DYNAMIC
+        body.mass = self.BOX_MASS
+        body.moment = self._box_moment
+        self.space.reindex_shapes_for_body(body)
+
+    def _set_box_static(self, i):
+        body = self.box_bodies[i]
+        body.velocity = (0, 0)
+        body.angular_velocity = 0.0
+        body.body_type = pymunk.Body.STATIC
+        self.space.reindex_shapes_for_body(body)
+
+    def _handle_lock(self, agent, lock_signal):
+        """
+        Rising-edge lock toggle. On the frame the signal crosses >0.5, toggle the nearest box
+        within LOCK_DIST: unlocked -> lock to self; locked-by-self -> unlock; locked-by-other ->
+        no-op (only the team that locked a box can unlock it).
+        """
+        pressed = lock_signal > 0.5
+        rising = pressed and not self._prev_lock[agent]
+        self._prev_lock[agent] = pressed
+        if not rising:
+            return
+        i, d = self._nearest_box(agent)
+        if d > self.LOCK_DIST:
+            return
+        owner = self.box_lock_owner[i]
+        if owner is None:
+            self._set_box_static(i)
+            self.box_lock_owner[i] = agent
+        elif owner == agent:
+            self._set_box_dynamic(i)
+            self.box_lock_owner[i] = None
+        # owner == other: no-op
 
     def _get_obs(self, agent):
         half = self.ARENA_SIZE / 2
@@ -166,7 +236,7 @@ class HideAndSeekEnv(ParallelEnv):
 
         # Boxes: pos/vel + lock_state (+1 self / -1 other / 0 none) + visible flag.
         for i, body in enumerate(self.box_bodies):
-            visible = self._visible(agent, body)
+            visible = self._visible(agent, body, self.box_shapes[i])
             owner = self.box_lock_owner[i]
             lock_state = 0.0 if owner is None else (1.0 if owner == agent else -1.0)
             if visible:
@@ -192,7 +262,12 @@ class HideAndSeekEnv(ParallelEnv):
         self.agents = self.possible_agents[:]
         self.steps = 0
         self.episode += 1
+        # Release any boxes left locked (STATIC) from the previous episode, then clear state.
+        for i in range(self.N_BOXES):
+            if self.box_lock_owner[i] is not None:
+                self._set_box_dynamic(i)
         self.box_lock_owner = [None] * self.N_BOXES
+        self._prev_lock = {name: False for name in self.possible_agents}
 
         # Hider inside the room.
         hx = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
@@ -219,7 +294,11 @@ class HideAndSeekEnv(ParallelEnv):
             body.velocity = (0, 0)
             body.angular_velocity = 0.0
             body.angle = 0.0
-        self.space.reindex_shapes_for_body(self.space.static_body)
+            # Boxes were teleported directly (not via physics), so their broadphase index
+            # entries are stale. Reindex each so the very first LOS raycast in this episode's
+            # reset obs sees them at their new positions (step() reindexes via space.step()).
+            self.space.reindex_shapes_for_body(body)
+        self.space.reindex_static()
 
         obs = {a: self._get_obs(a) for a in self.agents}
         infos = {a: {} for a in self.agents}
@@ -231,14 +310,15 @@ class HideAndSeekEnv(ParallelEnv):
         for name in self.agents:
             action = actions[name]
             # Prep phase: the seeker is frozen (no force, velocity pinned to zero) so the
-            # hider gets a head start to set up. The hider moves freely the whole time.
+            # hider gets a head start to set up. The hider moves and locks freely the whole time.
             if in_prep and name == "seeker":
                 self.bodies[name].velocity = (0, 0)
+                self._prev_lock[name] = action[2] > 0.5  # track edge so it can't lock on unfreeze
                 continue
             fx = float(action[0]) * self.FORCE_SCALE
             fy = float(action[1]) * self.FORCE_SCALE
             self.bodies[name].apply_force_at_local_point((fx, fy))
-            # action[2] is the lock signal; inert in 5a, handled in 5b.
+            self._handle_lock(name, float(action[2]))
 
         self.space.step(1 / 60)
         self.steps += 1
@@ -256,29 +336,29 @@ class HideAndSeekEnv(ParallelEnv):
                 scale = self.MAX_VEL / speed
                 body.velocity = (vx * scale, vy * scale)
 
-        # --- TEMPORARY 5a reward: touch-tag, active only in the play phase. ---
-        # 5b replaces this whole block with the line-of-sight visibility reward.
-        hp = self.bodies["hider"].position
-        sp = self.bodies["seeker"].position
-        dist = ((hp.x - sp.x) ** 2 + (hp.y - sp.y) ** 2) ** 0.5
-        tagged = (not in_prep) and dist < self.TAG_DIST
-
+        # --- line-of-sight reward (paper-faithful), play phase only ---
+        # Seeker gets +r when it can see the hider, hider gets +r when unseen. Per-step
+        # magnitude is 1/PLAY_STEPS so a full episode totals at most ±1. No reward in prep,
+        # no tag/termination on contact: the game is pure visibility over a fixed horizon.
+        seeker_sees = self._visible("seeker", self.bodies["hider"])
         if in_prep:
             rewards = {"hider": 0.0, "seeker": 0.0}
         else:
-            rewards = {"hider": 0.01, "seeker": -0.01}
-            if tagged:
-                rewards["hider"] -= 1.0
-                rewards["seeker"] += 1.0
+            r = 1.0 / self.PLAY_STEPS
+            if seeker_sees:
+                rewards = {"hider": -r, "seeker": +r}
+            else:
+                rewards = {"hider": +r, "seeker": -r}
 
         time_up = self.steps >= self.MAX_STEPS
-        terminations = {a: tagged for a in self.agents}
+        terminations = {a: False for a in self.agents}  # no contact-termination anymore
         truncations = {a: time_up for a in self.agents}
 
         obs = {a: self._get_obs(a) for a in self.agents}
-        infos = {a: {} for a in self.agents}
+        # Expose visibility so eval/rendering can track the hidden-fraction metric.
+        infos = {a: {"seeker_sees_hider": seeker_sees, "in_prep": in_prep} for a in self.agents}
 
-        if tagged or time_up:
+        if time_up:
             self.agents = []
 
         return obs, rewards, terminations, truncations, infos
