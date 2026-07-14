@@ -272,3 +272,33 @@ Wired up the real game (`env_hs.py`): line-of-sight visibility reward, obs maski
 
 ### Stage 5b status
 Mechanics complete and correct; genuine but partial tool-use emerged (box-locking for cover, not doorway-barricading). Documented as-is. Decision pending on whether to push barricade emergence (5b-ii) or move to ramps (5c). `eval_hs.py` added; policies saved to `hs_hider.pt` / `hs_seeker.pt`.
+
+---
+
+## 2026-07-14 — Stage 5b-ii: open arena — seeker wins the arms race
+
+5b's partial emergence was blamed on the room hiding the hider ~84% for free. Fix: an open-arena layout (`HideAndSeekEnv(layout="open")`) — no interior walls, 4 boxes, hider spawns in a random corner. To hide at all it must push+lock boxes to close a corner pocket. Sanity check held: with the hider disabled, walls-alone hidden-fraction is **35.7%** (vs 84% in the room), so passive hiding is largely gone and the incentive to build cover is sharp. Room layout kept intact (obs 21 / 2 boxes) for 5b reproducibility; open is obs 33 / 4 boxes.
+
+### Run: 977 iterations, 2M steps/agent
+- The starting point is now paper-like: the hider *loses* by default — iter 1 hidden ~30%, return −0.39, seeker dominant.
+- Pools grew to **19 each**. No collapse.
+- Hider best-saved return climbed −0.39 → **+0.54** (iter 909) — but that's against a *pooled* opponent sample (includes weak early seekers).
+
+### Eval: the honest verdict (`eval_hs.py open`, 200 eps, deterministic, best-vs-best)
+
+| metric | value |
+|--------|-------|
+| hidden-fraction (play phase) | 32.8% |
+| episodes ending with a box locked | 50.5% |
+| hidden-fraction, hider disabled (walls only) | 31.3% |
+| **hider's active contribution** | **+1.5%** |
+
+**The seeker won the arms race.** Against the fully-trained seeker the hider is hidden only 32.8% — barely above the 31.3% passive floor. It learned the *lock tool* (50% of episodes) but the locked boxes don't provide effective cover: its active contribution is a negligible +1.5%. The training-log peak of +0.54 was against pooled (partly weak) seekers; head-to-head against the best seeker, the hider loses.
+
+**Why fort-building didn't emerge:** in an open arena with 4 boxes and a same-speed seeker, an *effective* barricade must be topologically closed — a partial box wall blocks one sightline and the seeker just circles it. Constructing a sealed pocket during the 96-step prep is a hard, sparse-reward, precise-multi-step problem; the seeker's job (keep LOS, navigate around obstacles) is far easier to learn. So the equilibrium favors the seeker. This matches the paper's own experience: box-fort emergence there needed hundreds of millions of steps, more agents and boxes, and auto-curricula. At 1v1 / 4 boxes / 2M steps with vanilla PPO, the seeker dominating is the expected outcome.
+
+### What both 5b and 5b-ii establish
+The lock/LOS *mechanics* work and the *tool* (box-locking) is genuinely used in both layouts. What did **not** emerge at this scale is effective *strategic construction* — a barricade good enough to beat a competent seeker. That's a scale/curriculum gap, not a bug: the env supports the behavior, the compute+population budget to discover it is the missing piece.
+
+### Stage 5b status (final)
+Two honest results banked: room = tool-use present but crutched by free walls (+8pp); open = no free hiding and the seeker wins (+1.5pp). Policies: `hs_*.pt` (room), `hs_open_*.pt` (open). Next-step options: (a) chase full emergence with real scale (2v2, 6+ boxes, 10M+ steps, maybe light shaping) — expensive; (b) Stage 5c ramps; (c) Stage 6 — write up the partial-emergence findings as the project's result, which is itself a faithful small-scale reproduction of "tool-use appears, full fort-building needs scale."
