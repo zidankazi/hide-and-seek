@@ -212,3 +212,23 @@ In an empty arena with equal speeds, the hider fundamentally *cannot* escape a c
 ### Stage 4 status
 
 Done. Self-play with a quality-ladder opponent pool eliminates the non-stationarity collapse: both policies now improve and hold. Eval scripts added (`eval_headless.py`, `eval_cross.py`). Next: Stage 5 — the real hide-and-seek environment (walls, movable + lockable boxes, lidar, ego-centric observations) where tool-use can actually emerge.
+
+---
+
+## 2026-07-14 — Stage 5a: hide-and-seek env skeleton
+
+Scoped Stage 5 (see `STAGE5_PLAN.md`): line-of-sight reward, boxes + walls + lock, 1v1, ramps deferred. Built into four sub-stages; this is 5a — the env skeleton, before LOS/lock.
+
+New `env_hs.py` (`HideAndSeekEnv`), leaving `TagEnv` in `env.py` untouched. Key realization: the renderer was already built for this (3D boxes with lock icons, arbitrary interior walls, PREP/PLAY phase pill), so Stage 5 is almost entirely env-side.
+
+What's in the skeleton:
+- **Fixed map:** a 240×240 room in the top-left corner (arena edge walls + 3 interior segments) with a single 60px doorway in the bottom wall. Hider spawns inside, seeker outside.
+- **Prep phase:** first 40% of the episode (96 of 240 steps) the seeker is frozen (force suppressed + velocity pinned to zero), hider moves freely, no reward accrues.
+- **Movable boxes:** `N_BOXES=2` dynamic pymunk box bodies (mass 3 — pushable by an agent but heavy enough to build a wall), repositioned inside the room each reset.
+- **Obs (21 dims):** self(4) + opponent(4 + visible flag) + 2 boxes×(4 + lock_state + visible flag). Lock/visible are stubbed (always visible, lock_state 0) until 5b.
+- **Action (3 dims):** `[fx, fy, lock]`; the lock signal is inert in 5a.
+- **Reward (temporary):** touch-tag, play-phase only — just to smoke-test motion/boxes/prep before LOS replaces it in 5b.
+
+Verified headless: obs/act dims correct, seeker displacement during prep = 0.0, boxes get pushed, prep reward 0/0, episodes truncate at 240 cleanly. Also ran a 3-iteration self-play integration test — `train_selfplay.py`'s loop wires up to the new env (21/3 dims) with no changes needed. Added `watch_hs.py` (random-ish viewer) to eyeball geometry + prep freeze.
+
+Next: 5b — the real game (LOS visibility reward + obs masking + lock mechanic), where hiding behind the barricade finally pays off.
