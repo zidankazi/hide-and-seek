@@ -232,3 +232,43 @@ What's in the skeleton:
 Verified headless: obs/act dims correct, seeker displacement during prep = 0.0, boxes get pushed, prep reward 0/0, episodes truncate at 240 cleanly. Also ran a 3-iteration self-play integration test — `train_selfplay.py`'s loop wires up to the new env (21/3 dims) with no changes needed. Added `watch_hs.py` (random-ish viewer) to eyeball geometry + prep freeze.
 
 Next: 5b — the real game (LOS visibility reward + obs masking + lock mechanic), where hiding behind the barricade finally pays off.
+
+---
+
+## 2026-07-14 — Stage 5b: LOS reward + lock, and partial tool-use emergence
+
+Wired up the real game (`env_hs.py`): line-of-sight visibility reward, obs masking, and the box-lock mechanic.
+
+### Mechanics (all validated in isolation before training)
+- **LOS reward:** each play-phase step, `segment_query_first` raycasts seeker→hider; seeker gets `+1/PLAY_STEPS` when the line is clear, hider gets it when a wall/box occludes. Episode return ∈ [-1,+1] = the hider's hidden-fraction. No contact-termination — pure visibility over a fixed horizon.
+- **Perception via shape-filter categories:** LOS rays mask to OCCLUDER_CAT so they hit only walls/boxes and pass through agents. Obs masking is real: opponent/box fields zero out when not in sight.
+- **Lock:** `action[2] > 0.5` rising-edge toggles the nearest box within reach. Lock → STATIC (owner set); owner-unlock → DYNAMIC (mass/moment restored); other team can't unlock. Locked boxes stop dead *and* still occlude rays.
+- **Bug caught:** teleported dynamic boxes have stale broadphase entries, so the first-frame LOS obs after `reset()` was wrong until I added a per-box `reindex_shapes_for_body`. (During `step()` it's fine — `space.step()` reindexes.)
+
+### Run: 977 iterations, 2M steps/agent
+- Pools grew to **17 each** (vs 7 in Stage 4) — far more improvement events, i.e. healthier back-and-forth learning. No collapse.
+- **Seeker learned to hunt:** best return −0.490 → −0.057 (iter 510). It learned to enter the room and find frozen hiders, cutting their hidden-fraction from ~74% toward ~47%.
+- Hider stayed highly hidden (~0.8–0.97) throughout — but hidden-fraction alone can't tell "actively barricades" from "walls hide it for free."
+
+### Eval: is the hider actually using tools? (`eval_hs.py`, 200 eps, deterministic)
+
+| metric | value |
+|--------|-------|
+| hidden-fraction (play phase) | 91.9% |
+| episodes ending with a box locked | **58.0%** |
+| min box→doorway dist at prep end | mean 104px, best 32px (gap ~30px) |
+| hidden-fraction, hider disabled (walls only) | 83.9% |
+| **hider's active contribution** | **+8.0pp** |
+
+**Partial emergence — the honest result.** The hider genuinely learned to *lock boxes* (58% of episodes) and uses them plus movement as cover for a real +8pp over passive walls. But it did **not** reliably learn the paper's headline "seal the doorway" strategy — boxes get locked as ad-hoc cover near the hider (mean 104px from the door), not in the gap. The capability exists (best case sealed it at 32px) but isn't consistent.
+
+**Why it stalled at the local optimum:** the corner room already hides the hider ~84% for free, so the gradient toward the much harder, precise multi-step "push-box-into-doorway-during-prep" behavior is weak. The hider banked the easy reward and never had strong pressure to find the door-block. This is a reward-landscape problem, not a mechanics problem — the env supports the full behavior, the incentive just isn't sharp enough yet.
+
+### Options to push toward the full barricade (Stage 5b-ii, if pursued)
+1. **Weaken passive hiding** — bigger doorway, or seeker spawns with partial LOS into the room, so the hider *must* block the door to score.
+2. **Shaping** — small bonus for a box occupying the doorway during play (risks over-engineering vs the paper's pure reward).
+3. **Longer training / bigger pool**, or more boxes so cover-building is easier to stumble into.
+4. **Open arena** (no free-hiding room) — forces the hider to *build* cover from scratch, which is closer to the paper's box-fort emergence.
+
+### Stage 5b status
+Mechanics complete and correct; genuine but partial tool-use emerged (box-locking for cover, not doorway-barricading). Documented as-is. Decision pending on whether to push barricade emergence (5b-ii) or move to ramps (5c). `eval_hs.py` added; policies saved to `hs_hider.pt` / `hs_seeker.pt`.
