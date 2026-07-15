@@ -6,19 +6,15 @@ from pettingzoo import ParallelEnv
 
 class HideAndSeekEnv(ParallelEnv):
     """
-    Stage 5 hide-and-seek, 1v1. A hider starts inside a walled room with a single doorway
-    and some movable boxes; a seeker starts outside. The paper-faithful goal (Stage 5b) is
-    line-of-sight: the seeker is rewarded when it can SEE the hider, the hider when unseen,
-    so the hider learns to barricade the doorway with boxes and lock them.
+    Stage 5 hide-and-seek. Hiders get a prep-phase head start to push and lock movable boxes
+    into cover; the reward is line-of-sight (paper-faithful): seekers are rewarded when they
+    can SEE a hider, hiders when unseen, so hiders learn to barricade with boxes and lock them.
 
-    THIS FILE IS STAGE 5a: the env skeleton. Room geometry, prep phase, movable boxes, and
-    the full 21-dim observation / 3-dim action layout are in place. The lock action and the
-    line-of-sight reward/masking are stubbed (lock is inert, visibility is always 1) and get
-    wired up in 5b. Reward here is a TEMPORARY touch-tag (same as TagEnv) purely so we can
-    smoke-test that agents move, push boxes, and respect the prep freeze before adding LOS.
+    Supports 1v1 (Stage 5a/5b, agents "hider"/"seeker") and NvN teams (the scale-up run,
+    agents "hider_0".."seeker_N-1") via team_size — see __init__ for the team semantics.
 
-    PettingZoo Parallel API: both agents act each step; obs/rewards/etc. come back as dicts
-    keyed by "hider"/"seeker".
+    PettingZoo Parallel API: all agents act each step; obs/rewards/etc. come back as dicts
+    keyed by agent name.
     """
 
     metadata = {"render_modes": ["human"], "name": "hide_and_seek_v0", "render_fps": 60}
@@ -65,18 +61,37 @@ class HideAndSeekEnv(ParallelEnv):
     def PLAY_STEPS(self):
         return self.MAX_STEPS - self.PREP_STEPS
 
-    def __init__(self, render_mode=None, layout="room"):
+    def __init__(self, render_mode=None, layout="room", team_size=1, n_boxes=None):
         """
         layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
             hider passively, so tool-use is optional.
         layout="open" (Stage 5b-ii): open arena, no interior walls, 4 boxes, hider spawns in a
             random corner. Nothing hides the hider for free — it must push+lock boxes to close
             a corner pocket, forcing genuine fort-building (closest to the paper).
+
+        team_size=1 keeps the original 1v1 game unchanged (agents "hider"/"seeker").
+        team_size>=2 (the scale-up run) fields teams ("hider_0".."seeker_N-1"): obs gain
+        teammate blocks, box locks are owned per-TEAM (either teammate can unlock), and the
+        LOS reward is team-level — seekers score when ANY seeker sees ANY hider, hiders score
+        only when ALL of them are unseen (paper-faithful team reward).
+        n_boxes overrides the layout default (room 2 / open 4).
         """
         assert layout in ("room", "open")
+        assert team_size >= 1
         self.layout = layout
-        self.N_BOXES = 2 if layout == "room" else 4
-        self.possible_agents = ["hider", "seeker"]
+        self.team_size = team_size
+        self.N_BOXES = n_boxes if n_boxes is not None else (2 if layout == "room" else 4)
+        if team_size == 1:
+            self.possible_agents = ["hider", "seeker"]
+        else:
+            self.possible_agents = [f"hider_{i}" for i in range(team_size)] + \
+                                   [f"seeker_{i}" for i in range(team_size)]
+        # team[name] -> "hider"/"seeker"; teams[team] -> member names. With team_size=1 the
+        # member names ARE the team names, which is what keeps all 1v1 code paths identical.
+        self.team = {n: ("hider" if n.startswith("hider") else "seeker")
+                     for n in self.possible_agents}
+        self.teams = {t: [n for n in self.possible_agents if self.team[n] == t]
+                      for t in ("hider", "seeker")}
         self.agents = []
         self.episode = 0
 
@@ -144,9 +159,10 @@ class HideAndSeekEnv(ParallelEnv):
             self.renderer = GameRenderer(title="Hide & Seek")
         self.steps = 0
 
-    # obs: self(4) + opp(4+visible) + N_BOXES*(4+lock+visible)
+    # obs: self(4) + each other agent (teammates first, then opponents) (4+visible)
+    #      + N_BOXES*(4+lock+visible)
     def _obs_dim(self):
-        return 4 + 5 + self.N_BOXES * 6
+        return 4 + (2 * self.team_size - 1) * 5 + self.N_BOXES * 6
 
     def observation_space(self, agent):
         return spaces.Box(low=-1.0, high=1.0, shape=(self._obs_dim(),), dtype=np.float32)
@@ -200,8 +216,8 @@ class HideAndSeekEnv(ParallelEnv):
     def _handle_lock(self, agent, lock_signal):
         """
         Rising-edge lock toggle. On the frame the signal crosses >0.5, toggle the nearest box
-        within LOCK_DIST: unlocked -> lock to self; locked-by-self -> unlock; locked-by-other ->
-        no-op (only the team that locked a box can unlock it).
+        within LOCK_DIST: unlocked -> lock to own team; locked-by-own-team -> unlock (either
+        teammate can); locked-by-other-team -> no-op. lock_owner stores the TEAM name.
         """
         pressed = lock_signal > 0.5
         rising = pressed and not self._prev_lock[agent]
@@ -212,20 +228,21 @@ class HideAndSeekEnv(ParallelEnv):
         if d > self.LOCK_DIST:
             return
         owner = self.box_lock_owner[i]
+        team = self.team[agent]
         if owner is None:
             self._set_box_static(i)
-            self.box_lock_owner[i] = agent
-        elif owner == agent:
+            self.box_lock_owner[i] = team
+        elif owner == team:
             self._set_box_dynamic(i)
             self.box_lock_owner[i] = None
-        # owner == other: no-op
+        # owner == other team: no-op
 
     def _get_obs(self, agent):
         half = self.ARENA_SIZE / 2
         mv = self.MAX_VEL
-        opponent = "hider" if agent == "seeker" else "seeker"
+        my_team = self.team[agent]
+        opp_team = "hider" if my_team == "seeker" else "seeker"
         sb = self.bodies[agent]
-        ob = self.bodies[opponent]
 
         parts = [
             (sb.position.x - half) / half,
@@ -234,24 +251,28 @@ class HideAndSeekEnv(ParallelEnv):
             sb.velocity.y / mv,
         ]
 
-        # Opponent block, masked by line-of-sight. When not visible, zero pos/vel + flag 0.
-        opp_visible = self._visible(agent, ob)
-        if opp_visible:
-            parts += [
-                (ob.position.x - half) / half,
-                (ob.position.y - half) / half,
-                ob.velocity.x / mv,
-                ob.velocity.y / mv,
-                1.0,
-            ]
-        else:
-            parts += [0.0, 0.0, 0.0, 0.0, 0.0]
+        # Every other agent (teammates first, then opponents), each masked by line-of-sight:
+        # when not visible, zero pos/vel + flag 0. Teammates are masked too — agents share a
+        # policy, not a radio.
+        others = [n for n in self.teams[my_team] if n != agent] + self.teams[opp_team]
+        for other in others:
+            ob = self.bodies[other]
+            if self._visible(agent, ob):
+                parts += [
+                    (ob.position.x - half) / half,
+                    (ob.position.y - half) / half,
+                    ob.velocity.x / mv,
+                    ob.velocity.y / mv,
+                    1.0,
+                ]
+            else:
+                parts += [0.0, 0.0, 0.0, 0.0, 0.0]
 
-        # Boxes: pos/vel + lock_state (+1 self / -1 other / 0 none) + visible flag.
+        # Boxes: pos/vel + lock_state (+1 own team / -1 other team / 0 none) + visible flag.
         for i, body in enumerate(self.box_bodies):
             visible = self._visible(agent, body, self.box_shapes[i])
             owner = self.box_lock_owner[i]
-            lock_state = 0.0 if owner is None else (1.0 if owner == agent else -1.0)
+            lock_state = 0.0 if owner is None else (1.0 if owner == my_team else -1.0)
             if visible:
                 parts += [
                     (body.position.x - half) / half,
@@ -284,39 +305,59 @@ class HideAndSeekEnv(ParallelEnv):
 
         margin = self.AGENT_RADIUS + 20
         lo, hi = margin, self.ARENA_SIZE - margin
+        positions = {}
+        sep = 2 * self.AGENT_RADIUS + 4  # min separation between agents placed together
+
+        def clear_of(names, p, min_d):
+            return all(((p[0] - positions[n][0]) ** 2 +
+                        (p[1] - positions[n][1]) ** 2) ** 0.5 >= min_d
+                       for n in names if n in positions)
 
         if self.layout == "room":
-            # Hider inside the room; seeker outside; boxes inside near the hider.
-            hx = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
-            hy = self.np_random.uniform(self.ROOM_LO, self.ROOM_HI)
-            while True:
-                sx = self.np_random.uniform(300, hi)
-                sy = self.np_random.uniform(300, hi)
-                if sx > 270 or sy > 270:  # outside the 240x240 room
-                    break
+            # Hiders inside the room; seekers outside; boxes inside near the hiders.
+            for name in self.teams["hider"]:
+                while True:
+                    p = (self.np_random.uniform(self.ROOM_LO, self.ROOM_HI),
+                         self.np_random.uniform(self.ROOM_LO, self.ROOM_HI))
+                    if clear_of(list(positions), p, sep):
+                        break
+                positions[name] = p
+            for name in self.teams["seeker"]:
+                while True:
+                    p = (self.np_random.uniform(300, hi), self.np_random.uniform(300, hi))
+                    if clear_of(self.teams["seeker"], p, sep):  # outside the 240x240 room by construction
+                        break
+                positions[name] = p
             box_spawn = lambda: (self.np_random.uniform(self.ROOM_LO, self.ROOM_HI),
                                  self.np_random.uniform(self.ROOM_LO, self.ROOM_HI))
         else:
-            # Open arena. Hider spawns in a random corner pocket (near two arena walls it can
-            # complete into cover); boxes scatter mid-arena; seeker spawns anywhere far off.
+            # Open arena. The hider team spawns in one random corner pocket (near two arena
+            # walls it can complete into cover); boxes scatter mid-arena; seekers spawn
+            # anywhere far off from every hider.
             corner = self.np_random.integers(4)
             cx = lo if corner in (0, 2) else hi
             cy = lo if corner in (0, 1) else hi
-            hx = cx + (1 if cx == lo else -1) * self.np_random.uniform(0, 90)
-            hy = cy + (1 if cy == lo else -1) * self.np_random.uniform(0, 90)
-            while True:
-                sx = self.np_random.uniform(lo, hi)
-                sy = self.np_random.uniform(lo, hi)
-                if ((sx - hx) ** 2 + (sy - hy) ** 2) ** 0.5 >= self.MIN_SPAWN_DIST:
-                    break
+            for name in self.teams["hider"]:
+                while True:
+                    p = (cx + (1 if cx == lo else -1) * self.np_random.uniform(0, 90),
+                         cy + (1 if cy == lo else -1) * self.np_random.uniform(0, 90))
+                    if clear_of(list(positions), p, sep):
+                        break
+                positions[name] = p
+            for name in self.teams["seeker"]:
+                while True:
+                    p = (self.np_random.uniform(lo, hi), self.np_random.uniform(lo, hi))
+                    if clear_of(self.teams["hider"], p, self.MIN_SPAWN_DIST) and \
+                       clear_of(self.teams["seeker"], p, sep):
+                        break
+                positions[name] = p
             mid_lo, mid_hi = self.ARENA_SIZE * 0.25, self.ARENA_SIZE * 0.75
             box_spawn = lambda: (self.np_random.uniform(mid_lo, mid_hi),
                                  self.np_random.uniform(mid_lo, mid_hi))
 
-        self.bodies["hider"].position = (hx, hy)
-        self.bodies["hider"].velocity = (0, 0)
-        self.bodies["seeker"].position = (sx, sy)
-        self.bodies["seeker"].velocity = (0, 0)
+        for name, p in positions.items():
+            self.bodies[name].position = p
+            self.bodies[name].velocity = (0, 0)
 
         for i, body in enumerate(self.box_bodies):
             bx, by = box_spawn()
@@ -339,9 +380,9 @@ class HideAndSeekEnv(ParallelEnv):
 
         for name in self.agents:
             action = actions[name]
-            # Prep phase: the seeker is frozen (no force, velocity pinned to zero) so the
-            # hider gets a head start to set up. The hider moves and locks freely the whole time.
-            if in_prep and name == "seeker":
+            # Prep phase: seekers are frozen (no force, velocity pinned to zero) so the
+            # hiders get a head start to set up. Hiders move and lock freely the whole time.
+            if in_prep and self.team[name] == "seeker":
                 self.bodies[name].velocity = (0, 0)
                 self._prev_lock[name] = action[2] > 0.5  # track edge so it can't lock on unfreeze
                 continue
@@ -353,9 +394,10 @@ class HideAndSeekEnv(ParallelEnv):
         self.space.step(1 / 60)
         self.steps += 1
 
-        # Keep the seeker pinned during prep even after the physics step (contacts could nudge it).
+        # Keep seekers pinned during prep even after the physics step (contacts could nudge them).
         if in_prep:
-            self.bodies["seeker"].velocity = (0, 0)
+            for name in self.teams["seeker"]:
+                self.bodies[name].velocity = (0, 0)
 
         # Clamp agent velocities (boxes keep their own physics).
         for name in self.agents:
@@ -367,18 +409,19 @@ class HideAndSeekEnv(ParallelEnv):
                 body.velocity = (vx * scale, vy * scale)
 
         # --- line-of-sight reward (paper-faithful), play phase only ---
-        # Seeker gets +r when it can see the hider, hider gets +r when unseen. Per-step
-        # magnitude is 1/PLAY_STEPS so a full episode totals at most ±1. No reward in prep,
-        # no tag/termination on contact: the game is pure visibility over a fixed horizon.
-        seeker_sees = self._visible("seeker", self.bodies["hider"])
+        # Team-level: seekers get +r when ANY seeker sees ANY hider, hiders get +r only when
+        # ALL hiders are unseen. Per-step magnitude is 1/PLAY_STEPS so a full episode totals
+        # at most ±1. No reward in prep, no tag/termination on contact: the game is pure
+        # visibility over a fixed horizon. (With team_size=1 this is the original 1v1 reward.)
+        seeker_sees = any(self._visible(s, self.bodies[h])
+                          for s in self.teams["seeker"] for h in self.teams["hider"])
         if in_prep:
-            rewards = {"hider": 0.0, "seeker": 0.0}
+            rewards = {a: 0.0 for a in self.agents}
         else:
             r = 1.0 / self.PLAY_STEPS
-            if seeker_sees:
-                rewards = {"hider": -r, "seeker": +r}
-            else:
-                rewards = {"hider": +r, "seeker": -r}
+            seen_sign = +1.0 if seeker_sees else -1.0
+            rewards = {a: (seen_sign if self.team[a] == "seeker" else -seen_sign) * r
+                       for a in self.agents}
 
         time_up = self.steps >= self.MAX_STEPS
         terminations = {a: False for a in self.agents}  # no contact-termination anymore
@@ -402,7 +445,7 @@ class HideAndSeekEnv(ParallelEnv):
             agents.append({
                 "pos": (body.position.x, body.position.y),
                 "vel": (body.velocity.x, body.velocity.y),
-                "role": name,
+                "role": self.team[name],  # renderer colors by "hider"/"seeker"
                 "radius": self.AGENT_RADIUS,
             })
         boxes = []
@@ -419,8 +462,8 @@ class HideAndSeekEnv(ParallelEnv):
             "step": self.steps,
             "max_steps": self.MAX_STEPS,
             "prep_fraction": self.PREP_FRACTION,
-            "hiders": 1,
-            "seekers": 1,
+            "hiders": self.team_size,
+            "seekers": self.team_size,
             "reward": 0.0,
         }
         self.renderer.render(agents=agents, walls=self.walls, boxes=boxes, goal_pos=None, info=info)

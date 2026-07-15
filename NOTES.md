@@ -302,3 +302,38 @@ The lock/LOS *mechanics* work and the *tool* (box-locking) is genuinely used in 
 
 ### Stage 5b status (final)
 Two honest results banked: room = tool-use present but crutched by free walls (+8pp); open = no free hiding and the seeker wins (+1.5pp). Policies: `hs_*.pt` (room), `hs_open_*.pt` (open). Next-step options: (a) chase full emergence with real scale (2v2, 6+ boxes, 10M+ steps, maybe light shaping) — expensive; (b) Stage 5c ramps; (c) Stage 6 — write up the partial-emergence findings as the project's result, which is itself a faithful small-scale reproduction of "tool-use appears, full fort-building needs scale."
+
+---
+
+## 2026-07-14 — Stage 5c: 2v2 scale-up — scale made it worse, not better
+
+Chased real fort-building emergence with the agreed "expensive" config: **2v2, open arena, 6 boxes, 10M env steps/team (5x), pure LOS reward** (no shaping). Wall time ~2.5h.
+
+### What was built
+- `env_hs.py` generalized to teams: `HideAndSeekEnv(layout, team_size=1, n_boxes=None)`. With `team_size>=2` the agents are `hider_0..seeker_N-1`; per-agent obs = self + every other agent (teammates first, all LOS-masked — shared policy, not a radio) + boxes (55 dims at 2v2/6 boxes); box locks are owned per-TEAM (either teammate can unlock, opponents can't); the LOS reward is team-level (seekers score when ANY seeker sees ANY hider, hiders only when ALL are unseen); both seekers freeze during prep; the hider pair spawns in one corner pocket. `team_size=1` is byte-for-byte the old 1v1 — regression-checked against the recorded 5b-ii eval numbers.
+- `train_hs2.py`: one shared PPO policy per team, but a rollout buffer PER TEAMMATE so GAE never walks across trajectories (per-member advantages computed separately, concatenated for the minibatch update). Per-team quality-ladder pools, same snapshot rules as Stage 4/5b.
+
+### Run: 4883 iterations, 10M steps/team, pools 18/18
+- Paper-like start, brutal for hiders: two seekers seeing ANY hider puts the iter-1 hidden-fraction at ~4–18% (vs ~30% at 1v1).
+- Hider best-saved climbed −0.61 → **+0.033** (iter 4616) against the pooled seeker sample; at run end the live seeker sat at +0.86–0.91 vs the pooled hiders. The seekers stayed decisively on top the whole run.
+
+### Trainer flaw the eval exposed: save-best saturation
+`hs_2v2_seeker.pt` is an **iter-4 seeker**: the seeker's mean return hit a perfect +1.000 against the weak early hider pool at iteration 4 and by construction could never "improve" again, so its best-checkpoint froze there. "Best-vs-best" eval therefore pits the best hider against a nearly untrained seeker team. (1v1 runs never tripped this because a lone seeker never saturated the metric.) `train_hs2.py` now also saves `*_final.pt` end-of-run weights, and `eval_hs2.py` takes `--final`; for THIS run the final live weights are gone — the log is the evidence for the trained seeker's strength.
+
+### Eval (`eval_hs2.py`, 200 eps, deterministic)
+
+| metric | 2v2 (vs iter-4 seeker!) | 1v1 open (5b-ii) |
+|--------|------------------------|------------------|
+| team hidden-fraction (play) | **9.7%** | 32.8% |
+| episodes with a hider-locked box | 25.5% | 50.5% |
+| hider-locked boxes at episode end | 0.21 / 6 | — |
+| geometry-only floor (hiders disabled) | 18.2% | 31.3% |
+| hider active contribution | **−8.5pp** | +1.5pp |
+
+**Even against a nearly untrained seeker pair, the hider team hides less than 10% of the play phase** — and moving hiders get seen MORE than motionless corner-sitters (negative contribution: activity without cover is exposure). Tool-use regressed: lock rate halved vs 1v1, ~0.2 boxes locked per episode. No forts.
+
+### Verdict: at this compute class, adding agents raises the bar faster than it raises the learning
+The 2v2 scale-up made the hiders' problem strictly harder — two seekers cover sightlines superlinearly, the ANY-hider team reward means one exposed teammate zeroes both, and an effective fort must now enclose two bodies — while giving the learner nothing extra to climb with (same sparse reward, same vanilla PPO, no curriculum). The paper's fort-building needed hundreds of millions of steps, larger populations, AND auto-curricula; 10M more-or-less confirms the 5b-ii conclusion from the other direction: **the missing ingredient isn't agents or boxes, it's compute + curriculum.**
+
+### Stage 5c status
+Banked as the third honest data point: room = +8pp tool-use with free walls; 1v1 open = seeker wins (+1.5pp); 2v2 open at 5x steps = seekers win harder and tool-use regresses. Policies: `hs_2v2_*.pt` (with the saturation caveat above). Realistic next steps: (a) Stage 6 write-up of the emergence-needs-scale result; (b) curriculum (start 1v1, add the second seeker mid-run) or population-based training before spending more raw steps; (c) ramps (5c-original) on the 1v1 game where tool-use demonstrably works.
