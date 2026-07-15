@@ -92,6 +92,12 @@ class HideAndSeekEnv(ParallelEnv):
                      for n in self.possible_agents}
         self.teams = {t: [n for n in self.possible_agents if self.team[n] == t]
                       for t in ("hider", "seeker")}
+        # Curriculum knob (set per-episode via reset(options={"active_seekers": k})):
+        # seekers beyond the first k are DORMANT — frozen in place for the whole episode
+        # and excluded from the team line-of-sight check. Obs layout is unaffected, so
+        # policies transfer across curriculum phases. Default: everyone active.
+        self.active_seekers = team_size
+        self._dormant = set()
         self.agents = []
         self.episode = 0
 
@@ -293,6 +299,12 @@ class HideAndSeekEnv(ParallelEnv):
         elif not hasattr(self, "np_random"):
             self.np_random = np.random.default_rng()
 
+        if options and "active_seekers" in options:
+            k = int(options["active_seekers"])
+            assert 1 <= k <= self.team_size
+            self.active_seekers = k
+        self._dormant = set(self.teams["seeker"][self.active_seekers:])
+
         self.agents = self.possible_agents[:]
         self.steps = 0
         self.episode += 1
@@ -382,7 +394,8 @@ class HideAndSeekEnv(ParallelEnv):
             action = actions[name]
             # Prep phase: seekers are frozen (no force, velocity pinned to zero) so the
             # hiders get a head start to set up. Hiders move and lock freely the whole time.
-            if in_prep and self.team[name] == "seeker":
+            # Dormant seekers (curriculum) stay frozen the entire episode.
+            if (in_prep and self.team[name] == "seeker") or name in self._dormant:
                 self.bodies[name].velocity = (0, 0)
                 self._prev_lock[name] = action[2] > 0.5  # track edge so it can't lock on unfreeze
                 continue
@@ -394,9 +407,10 @@ class HideAndSeekEnv(ParallelEnv):
         self.space.step(1 / 60)
         self.steps += 1
 
-        # Keep seekers pinned during prep even after the physics step (contacts could nudge them).
-        if in_prep:
-            for name in self.teams["seeker"]:
+        # Keep seekers pinned during prep (and dormant ones always) even after the physics
+        # step (contacts could nudge them).
+        for name in self.teams["seeker"]:
+            if in_prep or name in self._dormant:
                 self.bodies[name].velocity = (0, 0)
 
         # Clamp agent velocities (boxes keep their own physics).
@@ -414,7 +428,8 @@ class HideAndSeekEnv(ParallelEnv):
         # at most ±1. No reward in prep, no tag/termination on contact: the game is pure
         # visibility over a fixed horizon. (With team_size=1 this is the original 1v1 reward.)
         seeker_sees = any(self._visible(s, self.bodies[h])
-                          for s in self.teams["seeker"] for h in self.teams["hider"])
+                          for s in self.teams["seeker"][:self.active_seekers]
+                          for h in self.teams["hider"])
         if in_prep:
             rewards = {a: 0.0 for a in self.agents}
         else:

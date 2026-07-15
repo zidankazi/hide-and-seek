@@ -337,3 +337,36 @@ The 2v2 scale-up made the hiders' problem strictly harder — two seekers cover 
 
 ### Stage 5c status
 Banked as the third honest data point: room = +8pp tool-use with free walls; 1v1 open = seeker wins (+1.5pp); 2v2 open at 5x steps = seekers win harder and tool-use regresses. Policies: `hs_2v2_*.pt` (with the saturation caveat above). Realistic next steps: (a) Stage 6 write-up of the emergence-needs-scale result; (b) curriculum (start 1v1, add the second seeker mid-run) or population-based training before spending more raw steps; (c) ramps (5c-original) on the 1v1 game where tool-use demonstrably works.
+
+---
+
+## 2026-07-15 — Stage 6: seeker curriculum — better learning, same equilibrium
+
+5c's diagnosis was that 2v2-from-scratch never gives the hiders a learnable gradient. Test: same 2v2 / open / 6 boxes / 10M steps / pure LOS reward, but episodes start 2-hiders-vs-1-seeker and P(second seeker active) anneals 0→1 between 4M and 6M steps. The curriculum changes who plays, never what is rewarded.
+
+### What was built
+- `env_hs.py`: per-episode `active_seekers` knob (`reset(options={"active_seekers": k})`). Dormant seekers are frozen for the whole episode AND excluded from the team LOS check; the obs layout stays full-2v2 so policies transfer across phases with no surgery. Verified with a staged scene: a hider standing in only the dormant seeker's sightline scores as hidden with `active=1`, seen with `active=2`.
+- `train_hs2c.py`: the ramp, plus two lessons from 5c applied — dormant seekers' transitions are NOT stored (frozen bodies get team rewards uncorrelated with their actions), and `best_mean_return` resets when the ramp completes so save-best reflects the full game. `*_final.pt` end-of-run weights always saved. `eval_hs2.py` grew `--prefix=`/`--final`.
+
+### Run: 4883 iterations, 10M steps/team, ramp completed at 6.0M
+- **The curriculum worked as a curriculum.** Phase 1 gave hiders a real gradient (hid ~0.33 vs one seeker, vs ~0.04–0.18 cold-start in 5c). Pools grew to **30/30** (5c: 18/18) — nearly double the improvement events, a much livelier arms race.
+- Post-ramp, at full 2v2, the hider best-saved climbed to **+0.174** vs the pooled seekers (iter 4482; 5c's equivalent peak was +0.033), and end-of-run hid-vs-pool sat at 0.12–0.24 (5c: 0.08–0.17).
+- Save-best saturation struck AGAIN even post-reset: the seeker hit a perfect +1.000 vs a pooled hider sample at iter 2961 and froze its best-checkpoint there. Against a dominant team, mean-return-vs-pool is just a weak selection signal; `*_final.pt` is the trustworthy artifact (and this time we have it).
+
+### Eval (`eval_hs2.py`, 200 eps, deterministic) — final weights, plus 5c for reference
+
+| metric | S6 final | S6 save-best | 5c (vs iter-4 seeker) |
+|--------|---------|--------------|----------------------|
+| team hidden-fraction (play) | 10.1% | 8.6% | 9.7% |
+| episodes with a hider-locked box | 16.0% | 14.5% | 25.5% |
+| hider-locked boxes at end | 0.12 / 6 | 0.10 / 6 | 0.21 / 6 |
+| geometry-only floor | 14.1% | 14.5% | 18.2% |
+| hider active contribution | **−4.1pp** | −5.9pp | −8.5pp |
+
+Head-to-head, the trained seeker pair still crushes the hider pair: ~10% hidden, negative active contribution (moving without cover = exposure), and lock rate fell again (16% vs 25% in 5c vs 50% at 1v1) — under two-seeker pressure the hiders drift further from construction toward (futile) evasion. Note this eval is harsher than 5c's on its face: 5c's opposing seeker was accidentally untrained; here it's the genuine 10M-step seeker, and the hiders score about the same anyway.
+
+### Verdict: the curriculum fixed the learning, not the game
+Every training-side symptom 5c blamed improved — early gradient, pool growth, peak-vs-pool — and the head-to-head equilibrium didn't move. That's informative: the binding constraint is not the early-game gradient. A topologically-closed two-body fort, built in a 96-step prep under a sparse team reward, sits beyond what vanilla PPO with ~128-unit MLPs discovers in 10M steps regardless of how gently the difficulty ramps. The paper's recipe (hundreds of millions of steps, bigger populations, batched PPO at scale) remains the missing ingredient — our curriculum bought roughly a 5x better peak-vs-pool, and the gap is orders of magnitude.
+
+### Stage 6 status
+Fourth honest data point banked: curriculum improves every learning metric and leaves the equilibrium untouched. Policies: `hs_2v2c_*.pt` (save-best, post-ramp) and `hs_2v2c_*_final.pt` (end-of-run, preferred). With the scale hypothesis now tested from three angles (more steps, more agents, gentler curriculum), the natural close is the Stage 7 write-up — the project's result is a faithful small-scale map of exactly where emergence starts needing industrial compute.

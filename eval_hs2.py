@@ -8,8 +8,9 @@ hider team actually builds cover:
   - counterfactual: both hiders disabled (boxes never move) -> hidden-fraction from
     geometry alone; the delta is the hider team's active contribution
 
-Usage: python eval_hs2.py [N] [--final]   (default 200; --final loads the end-of-run
-weights hs_2v2_*_final.pt instead of the save-best ones, which can saturate early)
+Usage: python eval_hs2.py [N] [--final] [--prefix=hs_2v2c]
+(default 200 eps, prefix hs_2v2; --final loads the end-of-run *_final.pt weights
+instead of the save-best ones, which can saturate early)
 """
 import sys
 import numpy as np
@@ -21,6 +22,7 @@ from ppo_continuous import ActorCritic
 digits = [a for a in sys.argv[1:] if a.isdigit()]
 N = int(digits[0]) if digits else 200
 SUFFIX = "_final" if "--final" in sys.argv else ""
+PREFIX = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--prefix=")), "hs_2v2")
 TEAM_SIZE = 2
 N_BOXES = 6
 
@@ -32,7 +34,7 @@ act_dim = env.action_space(sample).shape[0]
 nets = {}
 for team in ("hider", "seeker"):
     ac = ActorCritic(obs_dim, act_dim)
-    ac.load_state_dict(torch.load(f"hs_2v2_{team}{SUFFIX}.pt"))
+    ac.load_state_dict(torch.load(f"{PREFIX}_{team}{SUFFIX}.pt"))
     ac.eval()
     nets[team] = ac
 
