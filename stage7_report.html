@@ -1,0 +1,546 @@
+<title>Pressure, Not Compute — Emergent Tool-Use at Desktop Scale</title>
+<style>
+  :root {
+    --ground:#eceff4; --surface:#ffffff; --surface-2:#f5f7fb;
+    --ink:#1a2231; --ink-2:#54607a; --ink-3:#818ca6;
+    --line:#dce1eb;
+    --hider:#2f86c5; --seeker:#df5a4f; --tool:#cf9327; --ramp:#3f9b74;
+    --good:#3f9b6d; --warn:#bd8425; --wall:#b64e3c;
+    --hider-soft:#2f86c520; --seeker-soft:#df5a4f20;
+    --shadow:0 1px 2px rgba(20,30,50,.06), 0 8px 26px rgba(20,30,50,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0f131b; --surface:#161c26; --surface-2:#1c232f;
+      --ink:#e7ebf3; --ink-2:#98a4bb; --ink-3:#6b7891; --line:#28313f;
+      --hider:#5bb2e8; --seeker:#f2796c; --tool:#e4b350; --ramp:#66b78d;
+      --good:#57b98a; --warn:#d6a24e; --wall:#d3705c;
+      --hider-soft:#5bb2e826; --seeker-soft:#f2796c26;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#eceff4; --surface:#ffffff; --surface-2:#f5f7fb;
+    --ink:#1a2231; --ink-2:#54607a; --ink-3:#818ca6; --line:#dce1eb;
+    --hider:#2f86c5; --seeker:#df5a4f; --tool:#cf9327; --ramp:#3f9b74;
+    --good:#3f9b6d; --warn:#bd8425; --wall:#b64e3c;
+    --hider-soft:#2f86c520; --seeker-soft:#df5a4f20;
+    --shadow:0 1px 2px rgba(20,30,50,.06), 0 8px 26px rgba(20,30,50,.05);
+  }
+  :root[data-theme="dark"] {
+    --ground:#0f131b; --surface:#161c26; --surface-2:#1c232f;
+    --ink:#e7ebf3; --ink-2:#98a4bb; --ink-3:#6b7891; --line:#28313f;
+    --hider:#5bb2e8; --seeker:#f2796c; --tool:#e4b350; --ramp:#66b78d;
+    --good:#57b98a; --warn:#d6a24e; --wall:#d3705c;
+    --hider-soft:#5bb2e826; --seeker-soft:#f2796c26;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:Charter,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    font-size:18px; line-height:1.62; -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace; }
+  .grotesk { font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; }
+
+  .wrap { max-width:760px; margin:0 auto; padding:0 26px; }
+  section { padding:34px 0; border-top:1px solid var(--line); }
+  section:first-of-type { border-top:none; }
+
+  .eyebrow {
+    font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:11.5px;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3);
+    display:flex; gap:.7em; flex-wrap:wrap; align-items:center;
+  }
+  .eyebrow b { color:var(--hider); font-weight:600; }
+  .eyebrow .s { color:var(--seeker); font-weight:600; }
+
+  h1 {
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-weight:800; letter-spacing:-.03em; line-height:1.02;
+    font-size:clamp(44px,9vw,80px); margin:.28em 0 .18em; text-wrap:balance;
+  }
+  h1 .b { color:var(--hider); }
+  h1 .r { color:var(--seeker); }
+  .deck { font-size:clamp(18px,2.4vw,21px); color:var(--ink-2); max-width:60ch; text-wrap:pretty; }
+  .deck b { color:var(--ink); font-weight:600; }
+
+  h2 {
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-weight:800; letter-spacing:-.02em; font-size:clamp(23px,3.6vw,30px);
+    margin:0 0 .5em; text-wrap:balance;
+  }
+  h2 .n {
+    font-family:ui-monospace,Menlo,monospace; font-size:.62em; font-weight:600;
+    color:var(--ink-3); margin-right:.7em; letter-spacing:0;
+  }
+  p { margin:0 0 1em; max-width:65ch; }
+  p:last-child { margin-bottom:0; }
+  em { color:var(--ink); font-style:italic; }
+  strong { font-weight:600; }
+  a { color:var(--hider); text-decoration:underline; text-underline-offset:2px; text-decoration-thickness:1px; }
+
+  /* hero */
+  .hero { padding-top:56px; padding-bottom:20px; }
+  .hero .deck { margin-top:.4em; }
+  .arena-strip {
+    display:flex; gap:6px; margin-top:30px; align-items:center;
+    font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--ink-3);
+  }
+  .dot { width:11px; height:11px; border-radius:50%; display:inline-block; }
+  .dot.h { background:var(--hider); }
+  .dot.s { background:var(--seeker); }
+  .dot.t { background:var(--tool); border-radius:2px; }
+  .dot.rp { background:var(--ramp); border-radius:2px 2px 2px 6px; }
+
+  /* reversal stat cards */
+  .reversal { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:8px; }
+  .statcard {
+    background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:22px 22px 20px; box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .statcard .tag {
+    font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--ink-3); display:flex; justify-content:space-between;
+  }
+  .statcard .regime { font-weight:600; }
+  .statcard.before .regime { color:var(--ink-2); }
+  .statcard.after .regime { color:var(--seeker); }
+  .metric-row { display:flex; flex-direction:column; gap:14px; margin-top:16px; }
+  .metric { }
+  .metric .label { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--ink-2); letter-spacing:.02em; }
+  .metric .val {
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-weight:800;
+    font-size:33px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.1;
+  }
+  .metric.hid .val { color:var(--hider); }
+  .metric.ramp .val { color:var(--seeker); }
+  .bar { height:6px; border-radius:3px; background:var(--surface-2); margin-top:7px; overflow:hidden; }
+  .bar > i { display:block; height:100%; border-radius:3px; }
+  .arrow-note {
+    text-align:center; font-family:ui-monospace,Menlo,monospace; font-size:12px;
+    color:var(--ink-3); margin-top:14px;
+  }
+  .arrow-note b { color:var(--ink); }
+
+  /* rung ladder */
+  .rungs { display:flex; flex-direction:column; gap:12px; margin-top:6px; }
+  .rung {
+    display:grid; grid-template-columns:auto 1fr auto; gap:16px 18px; align-items:center;
+    background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; box-shadow:var(--shadow);
+  }
+  .rung .idx {
+    font-family:ui-monospace,Menlo,monospace; font-weight:600; font-size:13px;
+    color:var(--ink-3); width:52px;
+  }
+  .rung .idx b { display:block; font-size:26px; color:var(--ink); font-weight:700; line-height:1; }
+  .rung .body h3 {
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:17px; font-weight:700;
+    margin:0 0 3px; letter-spacing:-.01em;
+  }
+  .rung .body p { font-size:14.5px; line-height:1.5; color:var(--ink-2); margin:0; max-width:46ch; }
+  .rung .stat { text-align:right; font-family:ui-monospace,Menlo,monospace; }
+  .rung .stat .big { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; display:block; line-height:1.1; }
+  .rung .stat .ctl { font-size:11px; color:var(--ink-3); }
+  .pill {
+    display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:10.5px;
+    letter-spacing:.1em; text-transform:uppercase; font-weight:600;
+    padding:3px 9px; border-radius:20px; margin-top:7px;
+  }
+  .pill.good { color:var(--good); background:color-mix(in srgb,var(--good) 15%,transparent); }
+  .pill.warn { color:var(--warn); background:color-mix(in srgb,var(--warn) 16%,transparent); }
+  .pill.wall { color:var(--wall); background:color-mix(in srgb,var(--wall) 15%,transparent); }
+  .rung.r2 { border-left:3px solid var(--good); }
+  .rung.r3 { border-left:3px solid var(--warn); }
+  .rung.r1 { border-left:3px solid var(--wall); }
+  .rung.r2 .stat .big { color:var(--good); }
+  .rung.r3 .stat .big { color:var(--warn); }
+  .rung.r1 .stat .big { color:var(--wall); }
+
+  /* chart */
+  .chartcard {
+    background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:22px 20px 16px; box-shadow:var(--shadow); margin-top:8px;
+  }
+  .chart-legend {
+    display:flex; gap:20px; flex-wrap:wrap; font-family:ui-monospace,Menlo,monospace;
+    font-size:12px; color:var(--ink-2); margin-bottom:6px;
+  }
+  .chart-legend span { display:inline-flex; align-items:center; gap:7px; }
+  .chart-legend i { width:16px; height:3px; border-radius:2px; display:inline-block; }
+  .chart-wrap { width:100%; overflow-x:auto; }
+  svg.chart { width:100%; height:auto; display:block; min-width:440px; }
+  .ln { fill:none; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; }
+  .ln.hider { stroke:var(--hider); }
+  .ln.seeker { stroke:var(--seeker); }
+  .pt { stroke:var(--surface); stroke-width:2; }
+  .pt.hider { fill:var(--hider); }
+  .pt.seeker { fill:var(--seeker); }
+  .axlab { font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  .grid { stroke:var(--line); stroke-width:1; }
+
+  /* wall / fortress */
+  .split { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:8px; }
+  .infobox {
+    background:var(--surface-2); border:1px solid var(--line); border-radius:12px; padding:18px;
+  }
+  .infobox .k { font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); }
+  .infobox .fig {
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-weight:800; letter-spacing:-.02em;
+    font-size:30px; margin:6px 0 2px; font-variant-numeric:tabular-nums;
+  }
+  .infobox.fort .fig { color:var(--tool); }
+  .infobox.funnel .fig { color:var(--wall); }
+  .infobox p { font-size:13.5px; line-height:1.5; color:var(--ink-2); margin:8px 0 0; }
+
+  /* funnel steps */
+  .funnel-steps { display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  .fstep { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  .fstep .fbar { height:22px; border-radius:5px; background:var(--surface-2); position:relative; overflow:hidden; border:1px solid var(--line); }
+  .fstep .fbar > i { display:block; height:100%; background:color-mix(in srgb,var(--wall) 55%,var(--surface)); }
+  .fstep .flab { display:flex; justify-content:space-between; gap:12px; }
+  .fstep .flab b { color:var(--ink); font-weight:600; }
+  .fstep .flab span { color:var(--ink-3); }
+  .fstep:first-child .fbar > i { background:color-mix(in srgb,var(--good) 55%,var(--surface)); }
+
+  /* callout / bug */
+  .callout {
+    background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--tool);
+    border-radius:12px; padding:20px 22px; box-shadow:var(--shadow);
+  }
+  .callout .k { font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--tool); font-weight:600; }
+  .callout h3 { font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-size:19px; font-weight:700; margin:6px 0 8px; letter-spacing:-.01em; }
+  .callout p { font-size:15px; line-height:1.55; margin:0 0 .7em; }
+  .std-scale { display:flex; gap:2px; margin:14px 0 4px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; }
+  .std-scale div { flex:1; text-align:center; padding:6px 2px; border-radius:4px; color:#fff; }
+
+  /* ladder of fixes */
+  .fixes { list-style:none; padding:0; margin:8px 0 0; counter-reset:fix; display:flex; flex-direction:column; gap:2px; }
+  .fixes li {
+    display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:baseline;
+    padding:10px 0; border-bottom:1px dashed var(--line);
+  }
+  .fixes li:last-child { border-bottom:none; }
+  .fixes li::before {
+    counter-increment:fix; content:counter(fix,decimal-leading-zero);
+    font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--ink-3); font-weight:600;
+  }
+  .fixes .ft { font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-weight:700; font-size:15px; }
+  .fixes .fd { color:var(--ink-2); font-size:14.5px; line-height:1.5; }
+
+  /* verdict */
+  .verdict {
+    background:linear-gradient(135deg,var(--hider-soft),var(--seeker-soft));
+    border:1px solid var(--line); border-radius:16px; padding:30px 28px;
+  }
+  .verdict h2 { margin-bottom:.4em; }
+  .verdict p { font-size:18.5px; max-width:60ch; }
+  .verdict .kicker { font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); margin-bottom:1em; }
+
+  footer { padding:30px 0 60px; color:var(--ink-3); font-size:13.5px; line-height:1.6; }
+  footer .mono { font-size:12.5px; }
+  footer b { color:var(--ink-2); font-weight:600; }
+
+  .fade { opacity:0; transform:translateY(14px); animation:rise .7s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes rise { to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion:reduce) {
+    .fade { animation:none; opacity:1; transform:none; }
+    .ln { stroke-dasharray:none !important; stroke-dashoffset:0 !important; }
+  }
+  @media (max-width:620px) {
+    body { font-size:17px; }
+    .reversal, .split { grid-template-columns:1fr; }
+    .rung { grid-template-columns:auto 1fr; }
+    .rung .stat { grid-column:2; text-align:left; }
+  }
+</style>
+
+<div class="wrap">
+
+  <section class="hero">
+    <div class="eyebrow fade">
+      <span>Hide-and-seek</span><span>·</span>
+      <span>emergent tool-use</span><span>·</span>
+      <span>desktop-scale reproduction</span>
+    </div>
+    <h1 class="fade" style="animation-delay:.05s">Pressure,<br>not <span class="r">compute</span>.</h1>
+    <p class="deck fade" style="animation-delay:.12s">
+      Reproducing OpenAI's emergent tool-use on one laptop. Across ~22 runs and 300M steps,
+      the thing that makes tools appear turned out not to be raw scale — it's an
+      <b>opponent you can't outrun</b>. Add a second seeker and ramp-use emerges from nothing.
+      The last rung — precise construction — is where the real wall lives.
+    </p>
+    <div class="arena-strip fade" style="animation-delay:.2s">
+      <span class="dot h"></span>hider
+      <span class="dot s" style="margin-left:12px"></span>seeker
+      <span class="dot t" style="margin-left:12px"></span>box
+      <span class="dot rp" style="margin-left:12px"></span>ramp
+    </div>
+  </section>
+
+  <section>
+    <h2>The reversal</h2>
+    <p>
+      For ten runs, one hider learned to do exactly one thing: run. A lone seeker moves at
+      the same speed, so evasion always wins and no tool ever pays for itself — a full
+      40-million-step co-evolution ended with the hider hidden <strong>98%</strong> of the play
+      phase and neither side ever touching the ramp. Then we gave the seekers a partner.
+    </p>
+    <div class="reversal">
+      <div class="statcard before">
+        <div class="tag"><span class="regime">1 v 1</span><span>evasion regime</span></div>
+        <div class="metric-row">
+          <div class="metric hid">
+            <div class="label">hider hidden-fraction</div>
+            <div class="val">97.7%</div>
+            <div class="bar"><i style="width:97.7%;background:var(--hider)"></i></div>
+          </div>
+          <div class="metric ramp">
+            <div class="label">seeker ramp-use</div>
+            <div class="val">1.3%</div>
+            <div class="bar"><i style="width:5.2%;background:var(--seeker)"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="statcard after">
+        <div class="tag"><span class="regime">1 v 2</span><span>pressure regime</span></div>
+        <div class="metric-row">
+          <div class="metric hid">
+            <div class="label">hider hidden-fraction</div>
+            <div class="val">56.2%</div>
+            <div class="bar"><i style="width:56.2%;background:var(--hider)"></i></div>
+          </div>
+          <div class="metric ramp">
+            <div class="label">seeker ramp-use</div>
+            <div class="val">9.1%</div>
+            <div class="bar"><i style="width:36.4%;background:var(--seeker)"></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="arrow-note">
+      one extra seeker → hiding collapses <b>98% → 56%</b> · tool-use appears <b>1.3% → 9.1%</b>
+    </div>
+  </section>
+
+  <section>
+    <h2>Three rungs, one that held</h2>
+    <p>
+      The paper's emergent arc is a ladder: barricade, ramp-over, ramp-away. Measured on 200
+      deterministic episodes with no training assists, only the middle rung came in strong —
+      and the single-seeker control confirms it's the <em>pressure</em> doing it, not the policy.
+    </p>
+    <div class="rungs">
+      <div class="rung r2">
+        <div class="idx">rung<b>2</b></div>
+        <div class="body">
+          <h3>Seeker rides the ramp</h3>
+          <p>Fetches the ramp to the room and sees over the wall. Emerged from zero; climbs across training.</p>
+          <span class="pill good">Emerged</span>
+        </div>
+        <div class="stat"><span class="big">9.1%</span><span class="ctl">vs 4.1% · 1 seeker</span></div>
+      </div>
+      <div class="rung r3">
+        <div class="idx">rung<b>3</b></div>
+        <div class="body">
+          <h3>Hider locks the ramp away</h3>
+          <p>Denies the ramp during prep so the seekers stay grounded. Weak but real, and pressure-lifted.</p>
+          <span class="pill warn">Partial</span>
+        </div>
+        <div class="stat"><span class="big">7.0%</span><span class="ctl">vs 4.5% · 1 seeker</span></div>
+      </div>
+      <div class="rung r1">
+        <div class="idx">rung<b>1</b></div>
+        <div class="body">
+          <h3>Hider barricades the doorway</h3>
+          <p>Pushes a box into the doorway and locks it. Never converged — the wall of this whole project.</p>
+          <span class="pill wall">Wall</span>
+        </div>
+        <div class="stat"><span class="big">2.0%</span><span class="ctl">at floor</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">↑</span>The arms race</h2>
+    <p>
+      With two seekers the game becomes a genuine arms race. Over 40M steps the seekers learn
+      to fetch and stand on the ramp, and every point of ramp-use chips away at the hider's
+      ability to disappear. This crossing curve is the emergence we were hunting — earned on
+      the seeker side.
+    </p>
+    <div class="chartcard">
+      <div class="chart-legend">
+        <span><i style="background:var(--hider)"></i> hider episode return</span>
+        <span><i style="background:var(--seeker)"></i> seeker ramp-use</span>
+      </div>
+      <div class="chart-wrap">
+        <svg class="chart" viewBox="0 0 720 320" role="img" aria-label="Over 40 million steps, hider return falls from +0.71 to +0.37 while seeker ramp-use rises from 13.6% to 21.6%.">
+          <!-- gridlines -->
+          <line class="grid" x1="70" y1="30" x2="680" y2="30"></line>
+          <line class="grid" x1="70" y1="140" x2="680" y2="140"></line>
+          <line class="grid" x1="70" y1="250" x2="680" y2="250"></line>
+          <!-- left axis labels (hider return) -->
+          <text class="axlab" fill="var(--hider)" x="60" y="34" text-anchor="end">+0.8</text>
+          <text class="axlab" fill="var(--hider)" x="60" y="144" text-anchor="end">+0.4</text>
+          <text class="axlab" fill="var(--hider)" x="60" y="254" text-anchor="end">0.0</text>
+          <!-- right axis labels (ramp-use) -->
+          <text class="axlab" fill="var(--seeker)" x="690" y="34" text-anchor="start">25%</text>
+          <text class="axlab" fill="var(--seeker)" x="690" y="144" text-anchor="start">12%</text>
+          <text class="axlab" fill="var(--seeker)" x="690" y="254" text-anchor="start">0%</text>
+          <!-- x labels -->
+          <text class="axlab" fill="var(--ink-3)" x="70"  y="278" text-anchor="middle">5M</text>
+          <text class="axlab" fill="var(--ink-3)" x="331" y="278" text-anchor="middle">20M</text>
+          <text class="axlab" fill="var(--ink-3)" x="592" y="278" text-anchor="middle">35M</text>
+          <text class="axlab" fill="var(--ink-3)" x="375" y="304" text-anchor="middle" style="font-size:10.5px;opacity:.8">environment steps →</text>
+          <!-- hider return line: falling -->
+          <polyline class="ln hider" id="lnH"
+            points="70,54.8 157,57.5 244,68.5 331,85 419,104.3 506,120.8 593,140 680,148.3"></polyline>
+          <!-- seeker ramp-use line: rising -->
+          <polyline class="ln seeker" id="lnS"
+            points="70,130.3 157,157.6 244,144.4 331,121.5 419,89.8 506,60.8 593,59.9 680,85.4"></polyline>
+          <!-- endpoints -->
+          <circle class="pt hider"  cx="70"  cy="54.8" r="4"></circle>
+          <circle class="pt hider"  cx="680" cy="148.3" r="4.5"></circle>
+          <circle class="pt seeker" cx="70"  cy="130.3" r="4"></circle>
+          <circle class="pt seeker" cx="593" cy="59.9" r="4.5"></circle>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">✕</span>Why the first rung is a wall</h2>
+    <p>
+      Rung 1 never came — and it isn't for lack of reward. The incentive is enormous, and the
+      failure is one of <em>acquisition</em>: the sequence that builds the fortress is a needle
+      PPO never threads by chance, so the gradient toward it is essentially zero. Bigger batches
+      (the paper's biggest lever, tried here at 4×) scrubbed the gradient noise to nothing and
+      moved this needle not at all — the signature of a true exploration wall.
+    </p>
+    <div class="split">
+      <div class="infobox fort">
+        <div class="k">the incentive is there</div>
+        <div class="fig">+44 pts</div>
+        <p>Hand the trained hider a pre-sealed doorway and it stays hidden <b>87.9%</b> of the
+        play phase, against <b>44.2%</b> with an open door. The fortress wins — the hider just
+        can't build one.</p>
+      </div>
+      <div class="infobox funnel">
+        <div class="k">where it breaks — 100 clean eps</div>
+        <div class="funnel-steps">
+          <div class="fstep">
+            <div class="flab"><b>approaches the box</b><span>63%</span></div>
+            <div class="fbar"><i style="width:63%"></i></div>
+          </div>
+          <div class="fstep">
+            <div class="flab"><b>pushes it doorward</b><span>9–14%</span></div>
+            <div class="fbar"><i style="width:12%"></i></div>
+          </div>
+          <div class="fstep">
+            <div class="flab"><b>seals + locks it</b><span>2%</span></div>
+            <div class="fbar"><i style="width:2%"></i></div>
+          </div>
+        </div>
+        <p style="margin-top:12px">Pushing a 44px box into a 20px gap during a 144-step prep is
+        the step the policy never randomly finds.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="callout">
+      <div class="k">The bug that rewrote the earlier verdict</div>
+      <h3>"Needs industrial compute" was partly a measurement artifact</h3>
+      <p>
+        Earlier stages concluded emergence simply needed more scale. But the exploration noise
+        had a constant upward pressure and no ceiling, so the <em>longer</em> a run trained, the
+        more its policy decayed into pure randomness. The one early stage that did show tool-use
+        had the <em>lowest</em> noise of all; the 10-million-step runs had drifted to a sampling
+        spread of ~10<sup>13</sup> — every action a coin flip.
+      </p>
+      <div class="std-scale" aria-hidden="true">
+        <div style="background:var(--ramp)">5b room · std 0.6 · tools</div>
+        <div style="background:var(--warn)">stage 6 · std ~e³⁰</div>
+        <div style="background:var(--wall)">run 1 · NaN @ 19.9M</div>
+      </div>
+      <p style="margin-top:10px">
+        Every verdict built on long runs was contaminated by noise, not limited by compute.
+        Clamping it was fix #1 of eleven.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Eleven walls, one at a time</h2>
+    <p>
+      Each fix removed exactly one blocker and exposed the next — the debugging was the research.
+      Every metric below is a 200-episode deterministic eval with no assists.
+    </p>
+    <ol class="fixes">
+      <li><div><div class="ft">Exploration runaway</div><div class="fd">Clamp the policy's noise; the entropy bonus was ratcheting it to infinity.</div></div></li>
+      <li><div><div class="ft">Doorway plug</div><div class="fd">A spawn helper was passively hiding the hider, so the seeker never learned to hunt.</div></div></li>
+      <li><div><div class="ft">Ramp discovery</div><div class="fd">Start seekers <em>on</em> the ramp sometimes — this ignited rung 2.</div></div></li>
+      <li><div><div class="ft">Distance-evasion</div><div class="fd">Widen elevated sight so dodging inside the room stops beating the ramp.</div></div></li>
+      <li><div><div class="ft">Frozen opponents</div><div class="fd">A stale opponent pool let the seeker <em>unlearn</em> the ramp; go to a live ladder.</div></div></li>
+      <li><div><div class="ft">Lock thrashing</div><div class="fd">Noise kept toggling a just-placed lock off; make locking idempotent.</div></div></li>
+      <li><div><div class="ft">Mean vs noise</div><div class="fd">Clipped actions made the mean policy irrelevant; cap the spread so it matters.</div></div></li>
+      <li><div><div class="ft">Reverse-chained curriculum</div><div class="fd">Start episodes one action from a rung's payoff so its value is learnable.</div></div></li>
+      <li><div><div class="ft">Capacity</div><div class="fd">A wider fresh network learned in 3.5M what the legacy one couldn't in 48M.</div></div></li>
+      <li><div><div class="ft">Multi-agent pressure</div><div class="fd">The load-bearing one: two seekers break evasion and let tools pay off.</div></div></li>
+      <li><div><div class="ft">Batch size</div><div class="fd">4× the rollout — cut gradient noise to nothing, and confirmed rung 1 is a real wall.</div></div></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="verdict">
+      <div class="kicker">Verdict</div>
+      <h2>Emergence isn't one wall. It's a ladder of them — and the load-bearing rung is pressure.</h2>
+      <p>
+        One seeker is dodgeable and nothing emerges at <em>any</em> compute budget. Two seekers
+        make evasion unwinnable, and tool-use appears cleanly from scratch with a legible
+        arms-race curve. Where it still stops is precise construction under sparse reward — a
+        genuine exploration wall, now mapped from every side: the incentive is present, the
+        gradient absent, and it's invariant to batch. <strong>Emergence needs the right pressure
+        first; only then does the last rung need industrial exploration.</strong>
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <p class="mono">
+      METHOD — PettingZoo + pymunk, custom PPO, 128–256-unit MLPs. Line-of-sight reward only;
+      no reward shaping. Numbers are 200-episode deterministic evaluations with zero training
+      assists. "1 seeker" columns are the <b>same</b> policies re-evaluated against a single
+      seeker — the control isolating pressure from policy.
+    </p>
+    <p style="margin-top:1em">
+      Open questions left standing: does an LSTM policy or a demonstration-bootstrap clear the
+      construction wall, as the paper's 100M-step + memory recipe suggests? Full run-by-run
+      journal in <b>NOTES.md</b>.
+    </p>
+  </footer>
+
+</div>
+
+<script>
+  // one deliberate motion moment: the arms-race lines draw in on load
+  (function () {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    ['lnH', 'lnS'].forEach(function (id, k) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var len = el.getTotalLength();
+      el.style.strokeDasharray = len;
+      el.style.strokeDashoffset = len;
+      el.style.transition = 'stroke-dashoffset 1.4s cubic-bezier(.3,.7,.3,1) ' + (0.15 + k * 0.15) + 's';
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { el.style.strokeDashoffset = '0'; });
+      });
+    });
+  })();
+</script>

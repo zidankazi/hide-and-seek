@@ -370,3 +370,75 @@ Every training-side symptom 5c blamed improved — early gradient, pool growth, 
 
 ### Stage 6 status
 Fourth honest data point banked: curriculum improves every learning metric and leaves the equilibrium untouched. Policies: `hs_2v2c_*.pt` (save-best, post-ramp) and `hs_2v2c_*_final.pt` (end-of-run, preferred). With the scale hypothesis now tested from three angles (more steps, more agents, gentler curriculum), the natural close is the Stage 7 write-up — the project's result is a faithful small-scale map of exactly where emergence starts needing industrial compute.
+
+---
+
+## 2026-07-17 — Stage 7: the ramp — engineering the full emergent arc
+
+Stages 5–6 concluded "emergence needs industrial compute." Stage 7 set out to falsify that by *engineering* the environment until the paper's full ladder actually emerges at desktop scale:
+
+- **rung 1** — hider barricades the doorway with a locked box
+- **rung 2** — seeker transports the ramp to the room and peeks over the wall
+- **rung 3** — hider locks the ramp away (or steals it) during prep
+
+Roughly 22 training runs, ~300M env steps. The honest one-line result: **rung 2 genuinely emerged and is provably caused by multi-agent pressure; rung 3 weakly emerged; rung 1 (precise box-into-doorway construction) hit a real sample-complexity wall that ~15 targeted interventions could not break.** Along the way we found a bug that retroactively invalidates the Stage 5–6 "compute wall" conclusion.
+
+### The ramp mechanic (env)
+2D translation of the paper's climb-over-the-wall ramp: a pushable, lockable object. Any agent within `RAMP_USE_DIST` of it is *elevated* — its line-of-sight ignores `LOW_CAT` occluders (boxes + interior walls, split out from arena-edge `WALL_CAT`) out to `ELEV_RANGE`. Range is what makes ramp *position* matter: a seeker must transport it near the room to see in, and locking it far away is a real hider counter (locked objects can't be pushed; locks are per-team). Curriculum knob `reset(options={"ramp_active": bool})` parks it inert so it can be annealed in without changing the 28→33-dim obs. All pre-ramp layouts verified byte-for-byte identical (trajectory-hash regression vs stashed code).
+
+### The bug that rewrites Stages 5–6: log_std runaway
+Run 1 (30M) NaN'd at 19.9M steps. Cause: the Gaussian entropy bonus puts a *constant upward* gradient on `log_std`, so with nothing to oppose it the exploration std ratchets up forever. By the crash it was ~e^30. Checking every prior checkpoint: Stage 4 (short) `log_std`≈0.0; **Stage 5b room — the one stage where tool-use emerged — only +0.6; the 10M-step Stage 6 runs +30 to +39** (sampling std ~1e13: every rollout action was random bang-bang). **The longer a run went, the more its policy was pure noise.** So "more compute didn't help, needs industrial scale" was contaminated — more steps meant more entropy runaway, not more learning. Fixes: clamp std in use to `[0.05, 1.0]` (later per-team floors), clamp the log-ratio before `exp`, finite-loss guard, entropy 0.02→0.005, clip env-applied actions to [-1,1]. Per-iteration `std` logging added so exploration health is always visible.
+
+### The debugging ladder (each fix removed exactly one blocker; honest eval = 200 deterministic eps, no assists)
+1. **NaN/std runaway** → fixed (above).
+2. **Doorway plug**: box-0 spawn "assist" sat *behind* the doorway, passively hiding the hider (disabled-hider counterfactual hit 93%!) → seeker never learned to hunt, no pressure. Moved box above the doorway.
+3. **Elevation never discovered**: incidental ramp contact never converts → added `seeker_on_ramp` spawn assist (start standing on the ramp). This *ignited rung 2*: assisted-episode camping 27%→52% of play elevated.
+4. **Distance-evasion**: hider dodged the 250px elevation range inside the room → `ELEV_RANGE` 250→400 (whole room visible from the near band; ramp-denial becomes the only counter).
+5. **Frozen opponent pool**: improvement-gated snapshots froze at 11 for 16M steps → both sides overfit stale opponents, seeker *unlearned* the ramp. Switched to a live ladder (unconditional snapshots every 100 iters, cap 40, opponent = 50% newest / 50% uniform).
+6. **Lock thrashing**: rising-edge toggle meant exploration noise near an own-locked box randomly *un*-locked it, so "build and hold" was never reinforced → `lock_mode="level"` (lock ≥0.5 idempotent; unlock = separate edge < −0.5). Default "toggle" keeps old stages identical.
+7. **std/mean mismatch**: with actions clipped to [-1,1], std 2.7 made the mean policy (what eval runs) irrelevant → ceiling 1.0. This first pushed *all three rungs* nonzero in the honest eval simultaneously.
+8. **Reverse-chained curriculum**: hider-side assists (`ramp_locked`, `doorway_box` = sealed/placed/near, `hider_at_door`, `hider_on_ramp`) start episodes *in* or *one action from* a rung's payoff state, so the value function learns its worth and the policy learns to cause it.
+9. **Capacity**: legacy 128-MLP warm-chain plateaued at +0.42 over 48M steps; a fresh 256-wide hider hit +0.86 vs the same frozen seeker in 3.5M → capacity/interference + evade-prior was real. Nets widened to 256, arch inferred from checkpoints.
+10. **Precision** (per-team std floors: hider →0.05, seeker →0.25; lighter box) — did *not* help; the hider's std never annealed off the ceiling, meaning no construction gradient exists to sharpen.
+11. **Batch size** (the paper's biggest untried lever): rollout 2048→8192. Reduced gradient variance beautifully (training buckets went flat with tiny variance) but manufactured **no new signal** — clean confirmation the rung-1 plateau is a stable equilibrium, not noise.
+
+### The breakthrough: 1v1 → 1v2 breaks the evasion equilibrium
+Every 1v1 run converged to pure evasion — a same-speed hider can always outrun one seeker, so construction never pays. The 40M fresh-256 1v1 co-evolution mega-run ended at **97.7% hidden, seeker ramp-use 1.3%** (no tools, either side). The paper had *multiple* seekers. Generalized the env to `n_hiders`/`n_seekers` (asymmetric teams, team LOS reward, obs 33) and ran **1 hider vs 2 seekers**, second seeker annealed in 4M–8M, fresh 256 both sides, 40M steps.
+
+**This broke the equilibrium.** Two seekers pincer (camp the doorway + chase); evasion caps out and the seekers are pushed onto the ramp:
+
+| metric | 1v1 mega (40M) | 1v2 (40M) |
+|--------|---------------|-----------|
+| hider hidden-fraction | 97.7% | **56.2%** |
+| seeker ramp-use (elevated, play) | 1.3% | **9.1%** |
+
+The 1v2 training timeline is a clean co-evolutionary arms race — seeker ramp-use climbs and drives hider evasion from winning to losing:
+
+| env steps | hider return | seeker ramp-use |
+|-----------|-------------|-----------------|
+| 5M  | +0.71 | 13.6% |
+| 20M | +0.60 | 14.6% |
+| 30M | +0.47 | 21.5% |
+| 40M | +0.37 | 21.6% |
+
+### Final honest eval (1v2 + ramp, 200 deterministic eps, no assists; best lineage after bigger-batch co-evolution)
+| rung | metric | both seekers | single seeker (control) |
+|------|--------|-------------|------------------------|
+| 2 | seeker elevated (play) | **9.1%** | 4.1% |
+| 3 | ramp hider-locked at end | **7.0%** | 4.5% |
+| 1 | doorway barricaded at end | 2.0% | 2.5% |
+| — | hidden-fraction | 56.2% | 70.8% |
+
+**Rung 2 is real and pressure-caused** (9.1% vs 4.1% single-seeker, same policy; and the training curve above shows it emerging from ~zero and driving the game). **Rung 3 is a weak but genuine pressure-elevated signal** (7.0% vs 4.5%). **Rung 1 is the holdout** at floor.
+
+### Why rung 1 is a wall (and it's not the reward)
+The fortress incentive is proven: probing the trained duo, a *pre-sealed* doorway gives the hider 87.9% hidden vs 44.2% normal — barricading is worth +44pp and there is no dodge alternative. The failure is in *acquisition*: the behavioral funnel (100 clean eps) shows the hider approaches the box (~63%) but pushes it doorward on only 9–14% of episodes and completes+locks a barricade ~2%. Pushing a 44px box into a ~20px doorway gap during a 144-step prep is a precise multi-step motor sequence that is essentially never randomly sampled, so PPO gets ~zero gradient toward it — the hider's std never anneals off its ceiling. This is the classic hard-exploration signature, and bigger batches (variance reduction) provably don't fix a signal that isn't there. It's exactly the regime the paper cleared with 100M+ steps **and LSTM memory** — the two ingredients not yet replicated here.
+
+### Verdict: emergence is not one wall, it's a ladder of them — and multi-agent pressure is the load-bearing rung
+Stage 7 falsified the blunt Stages 5–6 conclusion in two ways. First, the "compute wall" was partly a *bug* (entropy-driven noise), not a fundamental limit. Second, and more important: **the missing ingredient for tool-use emergence at this scale was not raw compute — it was adversarial pressure that makes the tool the only option.** One seeker is dodgeable and nothing emerges at any compute budget; two seekers make evasion unwinnable and seeker ramp-use emerges cleanly from scratch, with a legible arms-race curve. Where it still stops is *precise construction under sparse reward* (rung 1) — a genuine sample-complexity/exploration wall, now characterized from every angle (incentive present, gradient absent, batch-invariant), whose known remedies are demonstrations/behavioral-cloning or LSTM+far-longer training. That is a sharper and more honest map than "needs industrial compute": **emergence needs the right *pressure* first, and only then does the last rung need industrial *exploration*.**
+
+### Stage 7 status / artifacts
+- Env: `env_hs.py` gains `ramp`, `lock_mode`, `n_hiders`/`n_seekers`, `box_mass`, elevation-aware LOS, and the ramp/doorway spawn-assist reset options (all trainer-only; evals never pass them). Renderer draws the ramp (green wedge).
+- Trainer: `train_hs7.py` (team-generic, `[total] [s2_start] [s2_end] [--load/--train/--fresh/--hidden/--rollout]`). Eval: `eval_hs7.py` (1v2, single-seeker control). Demo: `watch_hs7.py`. Timeline: `timeline_hs7.py` (log→TSV).
+- Policies: `hs_ramp_{hider,seeker}_final.pt` (current 1v2 lineage), `hs_mega1v1_*.pt` (the 1v1 pure-evasion baseline). Per-run logs `train_hs7_*.log` preserved (run1…run10, phaseA–A5, mega1v1, 1v2a, 1v2brA/B, big-batch).
+- **Remaining levers (a real fork, each a substantial change to the "pure emergence" framing): (a) behavioral-cloning bootstrap of the barricade motor sequence, then RL refine; (b) LSTM policy + far-longer training (the paper's actual rung-1 recipe).**

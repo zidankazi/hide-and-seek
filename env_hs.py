@@ -38,8 +38,30 @@ class HideAndSeekEnv(ParallelEnv):
     # Collision/query filter categories. LOS raycasts use a mask of OCCLUDER_CAT so they only
     # "see" walls and boxes and pass straight through agents (we don't want an agent's own body
     # blocking its view). Physics collisions are unaffected (masks stay all-ones).
-    AGENT_CAT = 0b01
-    OCCLUDER_CAT = 0b10
+    # Stage 7 splits occluders into two heights: WALL_CAT (arena edge, blocks sight always)
+    # and LOW_CAT (interior room walls + boxes — an ELEVATED agent standing on the ramp sees
+    # over these, within ELEV_RANGE). OCCLUDER_CAT stays the union, so every pre-ramp layout
+    # raycasts exactly as before.
+    AGENT_CAT = 0b0001
+    WALL_CAT = 0b0010
+    LOW_CAT = 0b0100
+    OCCLUDER_CAT = WALL_CAT | LOW_CAT
+    RAMP_CAT = 0b1000                    # the ramp itself never blocks sight
+
+    # --- Stage 7: the ramp (2D translation of the paper's climb-over-the-wall ramp) ---
+    # A pushable, lockable object. Any agent within RAMP_USE_DIST of its center is "elevated":
+    # its line-of-sight ignores LOW_CAT occluders (boxes, interior walls) out to ELEV_RANGE.
+    # Range is what makes ramp POSITION matter (as in the paper): a seeker must transport the
+    # ramp near the room to peek inside, and hiders can counter by locking it far away (locked
+    # objects can't be pushed; locks are per-team) or stealing it into the room.
+    RAMP_SIZE = 40
+    RAMP_MASS = 2                        # lighter than a box: quick to reposition
+    RAMP_USE_DIST = 55                   # ~touching the ramp = standing on it
+    ELEV_RANGE = 400                     # elevated sight only beats LOW occluders this far
+                                         # (400 = whole room visible from the near band, so
+                                         # in-room distance-evasion can't neutralize the ramp;
+                                         # denying the ramp becomes the hider's only counter)
+    RAMP_PARK = (540, 540)               # inactive ramp sits here, static and inert
 
     # --- fixed map: a room in the top-left corner with one doorway ---
     # Outer walls come from the arena edge; these interior segments close off the room,
@@ -61,7 +83,9 @@ class HideAndSeekEnv(ParallelEnv):
     def PLAY_STEPS(self):
         return self.MAX_STEPS - self.PREP_STEPS
 
-    def __init__(self, render_mode=None, layout="room", team_size=1, n_boxes=None):
+    def __init__(self, render_mode=None, layout="room", team_size=1, n_boxes=None,
+                 ramp=False, max_steps=None, lock_mode="toggle",
+                 n_hiders=None, n_seekers=None, box_mass=None, door_box_size=None):
         """
         layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
             hider passively, so tool-use is optional.
@@ -75,17 +99,46 @@ class HideAndSeekEnv(ParallelEnv):
         LOS reward is team-level — seekers score when ANY seeker sees ANY hider, hiders score
         only when ALL of them are unseen (paper-faithful team reward).
         n_boxes overrides the layout default (room 2 / open 4).
+
+        ramp=True (Stage 7) adds the ramp object: +7 obs dims (ramp block + own elevated
+        flag), elevation-aware LOS, and the reset(options={"ramp_active": bool}) curriculum
+        knob — inactive episodes park the ramp at RAMP_PARK, static, with elevation disabled,
+        so a run can anneal the mechanic in without changing the obs layout.
+        max_steps overrides MAX_STEPS (Stage 7 uses 360: prep must fit ramp defense AND
+        barricading). Reward scale adapts (per-step r = 1/PLAY_STEPS).
+
+        lock_mode="toggle" (default, Stages 5-6): rising edge of action[2]>0.5 toggles
+        the nearest lockable — but under exploration noise an agent dwelling near its own
+        locked box keeps re-crossing the threshold and randomly UNDOES its own lock, so
+        "build and hold" can't be reinforced. lock_mode="level" (Stage 7 runs 10+):
+        action[2]>0.5 locks (level-triggered, idempotent — holding it keeps the lock);
+        unlocking one's own lock is a separate EDGE-triggered press below -0.5.
         """
         assert layout in ("room", "open")
+        assert lock_mode in ("toggle", "level")
         assert team_size >= 1
         self.layout = layout
+        self.lock_mode = lock_mode
         self.team_size = team_size
+        # Asymmetric teams (the paper's actual pressure: several seekers pincer, so
+        # evasion stops paying and construction becomes the hider's only refuge).
+        # Defaults preserve the symmetric team_size behavior exactly.
+        self.n_hiders = n_hiders if n_hiders is not None else team_size
+        self.n_seekers = n_seekers if n_seekers is not None else team_size
+        assert self.n_hiders >= 1 and self.n_seekers >= 1
+        self.ramp = ramp
+        if max_steps is not None:
+            self.MAX_STEPS = int(max_steps)
+        if box_mass is not None:
+            # Stage 7 uses 2: a lighter box shortens the contact-push needed to place it,
+            # which is what makes precise barricade construction learnable under noise.
+            self.BOX_MASS = float(box_mass)
         self.N_BOXES = n_boxes if n_boxes is not None else (2 if layout == "room" else 4)
-        if team_size == 1:
+        if self.n_hiders == 1 and self.n_seekers == 1:
             self.possible_agents = ["hider", "seeker"]
         else:
-            self.possible_agents = [f"hider_{i}" for i in range(team_size)] + \
-                                   [f"seeker_{i}" for i in range(team_size)]
+            self.possible_agents = [f"hider_{i}" for i in range(self.n_hiders)] + \
+                                   [f"seeker_{i}" for i in range(self.n_seekers)]
         # team[name] -> "hider"/"seeker"; teams[team] -> member names. With team_size=1 the
         # member names ARE the team names, which is what keeps all 1v1 code paths identical.
         self.team = {n: ("hider" if n.startswith("hider") else "seeker")
@@ -96,7 +149,7 @@ class HideAndSeekEnv(ParallelEnv):
         # seekers beyond the first k are DORMANT — frozen in place for the whole episode
         # and excluded from the team line-of-sight check. Obs layout is unaffected, so
         # policies transfer across curriculum phases. Default: everyone active.
-        self.active_seekers = team_size
+        self.active_seekers = self.n_seekers
         self._dormant = set()
         self.agents = []
         self.episode = 0
@@ -128,13 +181,15 @@ class HideAndSeekEnv(ParallelEnv):
             [(edge, edge), (10, edge)],
             [(10, edge), (10, 10)],
         ]
+        n_edge = len(self.walls)  # arena-edge walls = WALL_CAT; interior room walls = LOW_CAT
         if self.layout == "room":
             self.walls += [list(w) for w in self.ROOM_WALLS]
-        for start, end in self.walls:
+        for k, (start, end) in enumerate(self.walls):
             seg = pymunk.Segment(self.space.static_body, start, end, 6)
             seg.elasticity = 0.4
             seg.friction = 0.5
-            seg.filter = pymunk.ShapeFilter(categories=self.OCCLUDER_CAT)
+            seg.filter = pymunk.ShapeFilter(
+                categories=self.WALL_CAT if k < n_edge else self.LOW_CAT)
             self.space.add(seg)
 
         # --- movable boxes ---
@@ -143,20 +198,49 @@ class HideAndSeekEnv(ParallelEnv):
         self.box_bodies = []
         self.box_shapes = []
         self.box_lock_owner = [None] * self.N_BOXES
-        self._box_moment = pymunk.moment_for_box(self.BOX_MASS, (self.BOX_SIZE, self.BOX_SIZE))
-        for _ in range(self.N_BOXES):
-            body = pymunk.Body(self.BOX_MASS, self._box_moment)
-            shape = pymunk.Poly.create_box(body, (self.BOX_SIZE, self.BOX_SIZE))
+        # Per-box sizes: box 0 can be enlarged (door_box_size, ramp+room only) so it seals
+        # the 60px doorway from a much wider placement range — this lowers the PRECISION the
+        # rung-1 barricade needs (a rough shove seals it), attacking the diagnosed bottleneck
+        # without touching the reward. Every other box, and all non-ramp layouts, unchanged.
+        self._door_box_size = (door_box_size if (door_box_size and ramp and layout == "room")
+                               else None)
+        self._box_sizes = [self._door_box_size if (i == 0 and self._door_box_size) else self.BOX_SIZE
+                           for i in range(self.N_BOXES)]
+        for i in range(self.N_BOXES):
+            sz = self._box_sizes[i]
+            moment = pymunk.moment_for_box(self.BOX_MASS, (sz, sz))
+            body = pymunk.Body(self.BOX_MASS, moment)
+            shape = pymunk.Poly.create_box(body, (sz, sz))
             shape.elasticity = 0.1
             shape.friction = 0.7
-            shape.filter = pymunk.ShapeFilter(categories=self.OCCLUDER_CAT)
+            shape.filter = pymunk.ShapeFilter(categories=self.LOW_CAT)
             self.box_bodies.append(body)
             self.box_shapes.append(shape)
+            self.space.add(body, shape)
+        self._box_moment = pymunk.moment_for_box(self.BOX_MASS, (self.BOX_SIZE, self.BOX_SIZE))
+
+        # --- the ramp (Stage 7) ---
+        self.ramp_body = None
+        self.ramp_shape = None
+        self.ramp_lock_owner = None
+        self.ramp_active = True     # curriculum knob; set per-episode via reset options
+        self._elevated_now = set()  # agents currently within RAMP_USE_DIST of the ramp
+        if self.ramp:
+            self._ramp_moment = pymunk.moment_for_box(
+                self.RAMP_MASS, (self.RAMP_SIZE, self.RAMP_SIZE))
+            body = pymunk.Body(self.RAMP_MASS, self._ramp_moment)
+            shape = pymunk.Poly.create_box(body, (self.RAMP_SIZE, self.RAMP_SIZE))
+            shape.elasticity = 0.1
+            shape.friction = 0.7
+            shape.filter = pymunk.ShapeFilter(categories=self.RAMP_CAT)
+            self.ramp_body = body
+            self.ramp_shape = shape
             self.space.add(body, shape)
 
         # Rising-edge tracking for the lock action: an agent only toggles a lock when its lock
         # signal crosses from <=0.5 to >0.5, so holding the signal high doesn't thrash lock/unlock.
         self._prev_lock = {name: False for name in self.possible_agents}
+        self._prev_unlock = {name: False for name in self.possible_agents}  # level mode only
 
         self.render_mode = render_mode
         self.renderer = None
@@ -166,9 +250,9 @@ class HideAndSeekEnv(ParallelEnv):
         self.steps = 0
 
     # obs: self(4) + each other agent (teammates first, then opponents) (4+visible)
-    #      + N_BOXES*(4+lock+visible)
+    #      + N_BOXES*(4+lock+visible) [+ ramp(4+lock+visible) + own-elevated flag]
     def _obs_dim(self):
-        return 4 + (2 * self.team_size - 1) * 5 + self.N_BOXES * 6
+        return 4 + (self.n_hiders + self.n_seekers - 1) * 5 + self.N_BOXES * 6 + (7 if self.ramp else 0)
 
     def observation_space(self, agent):
         return spaces.Box(low=-1.0, high=1.0, shape=(self._obs_dim(),), dtype=np.float32)
@@ -186,14 +270,28 @@ class HideAndSeekEnv(ParallelEnv):
         `target_shape` is the target's own shape when the target is itself an occluder (a box):
         the ray ends at the box center and would otherwise register a hit on the box itself, so
         a hit *on the target* counts as visible. For the opponent (not an occluder) pass None.
+
+        An ELEVATED observer (standing on the ramp) sees over LOW_CAT occluders — boxes and
+        interior walls — but only within ELEV_RANGE; beyond that, normal rules. Arena-edge
+        walls block sight regardless.
         """
         start = self.bodies[agent].position
         end = target_body.position
-        query_filter = pymunk.ShapeFilter(mask=self.OCCLUDER_CAT)
-        hit = self.space.segment_query_first(start, end, 1, query_filter)
+        mask = self.OCCLUDER_CAT
+        if agent in self._elevated_now and (end - start).length <= self.ELEV_RANGE:
+            mask = self.WALL_CAT
+        hit = self.space.segment_query_first(start, end, 1, pymunk.ShapeFilter(mask=mask))
         if hit is None:
             return True
         return hit.shape is target_shape
+
+    def _compute_elevated(self):
+        """Set of agents currently standing on (within RAMP_USE_DIST of) an active ramp."""
+        if not (self.ramp and self.ramp_active):
+            return set()
+        rp = self.ramp_body.position
+        return {n for n in self.possible_agents
+                if (self.bodies[n].position - rp).length <= self.RAMP_USE_DIST}
 
     def _nearest_box(self, agent):
         """Index of the box whose center is nearest the agent, and that distance."""
@@ -207,9 +305,10 @@ class HideAndSeekEnv(ParallelEnv):
 
     def _set_box_dynamic(self, i):
         body = self.box_bodies[i]
+        sz = self._box_sizes[i]
         body.body_type = pymunk.Body.DYNAMIC
         body.mass = self.BOX_MASS
-        body.moment = self._box_moment
+        body.moment = pymunk.moment_for_box(self.BOX_MASS, (sz, sz))
         self.space.reindex_shapes_for_body(body)
 
     def _set_box_static(self, i):
@@ -219,26 +318,63 @@ class HideAndSeekEnv(ParallelEnv):
         body.body_type = pymunk.Body.STATIC
         self.space.reindex_shapes_for_body(body)
 
+    def _set_ramp_dynamic(self):
+        body = self.ramp_body
+        body.body_type = pymunk.Body.DYNAMIC
+        body.mass = self.RAMP_MASS
+        body.moment = self._ramp_moment
+        self.space.reindex_shapes_for_body(body)
+
+    def _set_ramp_static(self):
+        body = self.ramp_body
+        body.velocity = (0, 0)
+        body.angular_velocity = 0.0
+        body.body_type = pymunk.Body.STATIC
+        self.space.reindex_shapes_for_body(body)
+
     def _handle_lock(self, agent, lock_signal):
         """
-        Rising-edge lock toggle. On the frame the signal crosses >0.5, toggle the nearest box
-        within LOCK_DIST: unlocked -> lock to own team; locked-by-own-team -> unlock (either
-        teammate can); locked-by-other-team -> no-op. lock_owner stores the TEAM name.
+        Acts on the nearest lockable (box, or the ramp when active) within LOCK_DIST.
+        Owners store the TEAM name; locked-by-other-team is always a no-op.
+
+        toggle mode: rising edge of signal>0.5 toggles (unlocked -> lock, own -> unlock).
+        level mode:  signal>0.5 locks (idempotent, noise can't undo a held lock);
+                     rising edge of signal<-0.5 unlocks one's own lock.
         """
-        pressed = lock_signal > 0.5
-        rising = pressed and not self._prev_lock[agent]
-        self._prev_lock[agent] = pressed
-        if not rising:
-            return
+        if self.lock_mode == "toggle":
+            pressed = lock_signal > 0.5
+            rising = pressed and not self._prev_lock[agent]
+            self._prev_lock[agent] = pressed
+            if not rising:
+                return
+            do_lock = do_unlock = True
+        else:
+            do_lock = lock_signal > 0.5
+            unlock_pressed = lock_signal < -0.5
+            do_unlock = unlock_pressed and not self._prev_unlock[agent]
+            self._prev_unlock[agent] = unlock_pressed
+            if not (do_lock or do_unlock):
+                return
+        team = self.team[agent]
         i, d = self._nearest_box(agent)
+        if self.ramp and self.ramp_active:
+            rd = (self.ramp_body.position - self.bodies[agent].position).length
+            if rd < d and rd <= self.LOCK_DIST:
+                owner = self.ramp_lock_owner
+                if owner is None and do_lock:
+                    self._set_ramp_static()
+                    self.ramp_lock_owner = team
+                elif owner == team and do_unlock:
+                    self._set_ramp_dynamic()
+                    self.ramp_lock_owner = None
+                return
         if d > self.LOCK_DIST:
             return
         owner = self.box_lock_owner[i]
-        team = self.team[agent]
-        if owner is None:
+        if owner is None and do_lock:
             self._set_box_static(i)
             self.box_lock_owner[i] = team
-        elif owner == team:
+        elif owner == team and do_unlock:
             self._set_box_dynamic(i)
             self.box_lock_owner[i] = None
         # owner == other team: no-op
@@ -291,6 +427,26 @@ class HideAndSeekEnv(ParallelEnv):
             else:
                 parts += [0.0, 0.0, 0.0, 0.0, lock_state, 0.0]
 
+        # Ramp block (same shape as a box block) + own-elevated flag. The ramp never occludes,
+        # but something between the agent and the ramp can hide it (target_shape=None works:
+        # the ray can't hit the ramp itself).
+        if self.ramp:
+            rb = self.ramp_body
+            owner = self.ramp_lock_owner
+            lock_state = 0.0 if owner is None else (1.0 if owner == my_team else -1.0)
+            if self._visible(agent, rb):
+                parts += [
+                    (rb.position.x - half) / half,
+                    (rb.position.y - half) / half,
+                    rb.velocity.x / mv,
+                    rb.velocity.y / mv,
+                    lock_state,
+                    1.0,
+                ]
+            else:
+                parts += [0.0, 0.0, 0.0, 0.0, lock_state, 0.0]
+            parts.append(1.0 if agent in self._elevated_now else 0.0)
+
         return np.clip(np.array(parts, dtype=np.float32), -1.0, 1.0)
 
     def reset(self, seed=None, options=None):
@@ -301,9 +457,37 @@ class HideAndSeekEnv(ParallelEnv):
 
         if options and "active_seekers" in options:
             k = int(options["active_seekers"])
-            assert 1 <= k <= self.team_size
+            assert 1 <= k <= self.n_seekers
             self.active_seekers = k
         self._dormant = set(self.teams["seeker"][self.active_seekers:])
+        # Ramp curriculum knob (persists across resets until changed, like active_seekers).
+        if self.ramp and options and "ramp_active" in options:
+            self.ramp_active = bool(options["ramp_active"])
+        # Discovery assists (per-episode, do NOT persist — evals never see them unless
+        # asked). Training-only spawn-state tweaks; the reward is never touched.
+        #   seeker_on_ramp: seekers start standing on the ramp — elevated vision is
+        #     experienced without first discovering transport+standing (ignited rung 2).
+        #   ramp_locked:    the ramp starts already hider-locked where it spawned — the
+        #     hider experiences "ramp denied -> seeker grounded" payoff directly (rung 3).
+        #   doorway_sealed: box 0 starts hider-locked in the doorway — the hider
+        #     experiences the barricade payoff directly (rung 1).
+        #   hider_on_ramp:  hiders start beside the ramp during prep — locking it is one
+        #     press away, transporting it a short push (reverse-chained rung 3).
+        #   doorway_box:    "sealed" = box 0 hider-locked in the doorway (full payoff
+        #     state); "placed" = box 0 sitting in the doorway UNLOCKED — the barricade
+        #     needs only the lock press; "near" = box 0 a short push (25-50px) above the
+        #     doorway — push + press (graded reverse chain for rung 1).
+        #   hider_at_door:  (with doorway_box="placed") hiders start beside the unlocked
+        #     doorway box — the barricade lock-press is immediately reachable. The evade
+        #     prior keeps hiders AWAY from the doorway, so without this the placed state
+        #     is never dwelled in and the press never fires (phase A lesson).
+        seeker_on_ramp = bool(options.get("seeker_on_ramp")) if options else False
+        ramp_locked = bool(options.get("ramp_locked")) if options else False
+        hider_on_ramp = bool(options.get("hider_on_ramp")) if options else False
+        hider_at_door = bool(options.get("hider_at_door")) if options else False
+        doorway_box = options.get("doorway_box") if options else None
+        if options and options.get("doorway_sealed"):  # back-compat alias
+            doorway_box = "sealed"
 
         self.agents = self.possible_agents[:]
         self.steps = 0
@@ -313,7 +497,11 @@ class HideAndSeekEnv(ParallelEnv):
             if self.box_lock_owner[i] is not None:
                 self._set_box_dynamic(i)
         self.box_lock_owner = [None] * self.N_BOXES
+        if self.ramp and self.ramp_lock_owner is not None:
+            self._set_ramp_dynamic()
+            self.ramp_lock_owner = None
         self._prev_lock = {name: False for name in self.possible_agents}
+        self._prev_unlock = {name: False for name in self.possible_agents}
 
         margin = self.AGENT_RADIUS + 20
         lo, hi = margin, self.ARENA_SIZE - margin
@@ -372,7 +560,16 @@ class HideAndSeekEnv(ParallelEnv):
             self.bodies[name].velocity = (0, 0)
 
         for i, body in enumerate(self.box_bodies):
-            bx, by = box_spawn()
+            # Ramp-era room spawns: box 0 starts ABOVE the doorway (same x band, ~80px
+            # push to seal it) — near enough to make rung 1 short, but clear of the
+            # doorway's sightlines and entry path. (Run 2 spawned it at y 170-210,
+            # directly behind the doorway: a passive plug that killed all hunting
+            # pressure and with it every gradient in the ladder.)
+            if self.ramp and self.layout == "room" and i == 0:
+                bx, by = (self.np_random.uniform(150, 205),
+                          self.np_random.uniform(140, 190))
+            else:
+                bx, by = box_spawn()
             body.position = (bx, by)
             body.velocity = (0, 0)
             body.angular_velocity = 0.0
@@ -381,8 +578,69 @@ class HideAndSeekEnv(ParallelEnv):
             # entries are stale. Reindex each so the very first LOS raycast in this episode's
             # reset obs sees them at their new positions (step() reindexes via space.step()).
             self.space.reindex_shapes_for_body(body)
+
+        if self.ramp:
+            if self.ramp_active:
+                # Ramp spawns outside the room: half the time in a NEAR band (within
+                # elevation range of the room interior — standing on it where it lies
+                # already pays, the discovery gradient), otherwise anywhere mid-arena
+                # (transport required). The first 30M run showed a uniform [250,480]
+                # band leaves stand-on-ramp reward too rare to ever be discovered.
+                self._set_ramp_dynamic()
+                while True:
+                    if self.np_random.random() < 0.5:
+                        p = (self.np_random.uniform(240, 330), self.np_random.uniform(240, 330))
+                    else:
+                        p = (self.np_random.uniform(240, 480), self.np_random.uniform(240, 480))
+                    if all(((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5 >= 60
+                           for q in positions.values()):
+                        break
+            else:
+                p = self.RAMP_PARK
+            self.ramp_body.position = p
+            self.ramp_body.velocity = (0, 0)
+            self.ramp_body.angular_velocity = 0.0
+            self.ramp_body.angle = 0.0
+            if self.ramp_active:
+                self.space.reindex_shapes_for_body(self.ramp_body)
+                for team, flag in (("seeker", seeker_on_ramp), ("hider", hider_on_ramp)):
+                    if not flag:
+                        continue
+                    rp = self.ramp_body.position
+                    for name in self.teams[team]:
+                        ang = self.np_random.uniform(0, 2 * np.pi)
+                        d = self.np_random.uniform(40, 50)  # inside RAMP_USE_DIST, outside the body
+                        self.bodies[name].position = (rp.x + d * np.cos(ang),
+                                                      rp.y + d * np.sin(ang))
+                        self.bodies[name].velocity = (0, 0)
+            else:
+                self._set_ramp_static()  # parked: inert scenery until the curriculum turns it on
+
+        if self.ramp and self.layout == "room":
+            if doorway_box in ("placed", "sealed", "near"):
+                b = self.box_bodies[0]
+                by = self.np_random.uniform(185, 212) if doorway_box == "near" else 228.0
+                b.position = (self.np_random.uniform(172, 188), by)
+                b.velocity = (0, 0)
+                b.angular_velocity = 0.0
+                b.angle = 0.0
+                self.space.reindex_shapes_for_body(b)
+                if doorway_box == "sealed":
+                    self._set_box_static(0)
+                    self.box_lock_owner[0] = "hider"
+                if hider_at_door:
+                    n_h = len(self.teams["hider"])
+                    for j, name in enumerate(self.teams["hider"]):
+                        # just inside the room, above the box, within LOCK_DIST of it
+                        self.bodies[name].position = (b.position.x + (j - (n_h - 1) / 2) * 40,
+                                                      b.position.y - 55)
+                        self.bodies[name].velocity = (0, 0)
+            if ramp_locked and self.ramp_active:
+                self._set_ramp_static()
+                self.ramp_lock_owner = "hider"
         self.space.reindex_static()
 
+        self._elevated_now = self._compute_elevated()
         obs = {a: self._get_obs(a) for a in self.agents}
         infos = {a: {} for a in self.agents}
         return obs, infos
@@ -398,6 +656,7 @@ class HideAndSeekEnv(ParallelEnv):
             if (in_prep and self.team[name] == "seeker") or name in self._dormant:
                 self.bodies[name].velocity = (0, 0)
                 self._prev_lock[name] = action[2] > 0.5  # track edge so it can't lock on unfreeze
+                self._prev_unlock[name] = action[2] < -0.5
                 continue
             fx = float(action[0]) * self.FORCE_SCALE
             fy = float(action[1]) * self.FORCE_SCALE
@@ -422,6 +681,8 @@ class HideAndSeekEnv(ParallelEnv):
                 scale = self.MAX_VEL / speed
                 body.velocity = (vx * scale, vy * scale)
 
+        self._elevated_now = self._compute_elevated()
+
         # --- line-of-sight reward (paper-faithful), play phase only ---
         # Team-level: seekers get +r when ANY seeker sees ANY hider, hiders get +r only when
         # ALL hiders are unseen. Per-step magnitude is 1/PLAY_STEPS so a full episode totals
@@ -445,6 +706,19 @@ class HideAndSeekEnv(ParallelEnv):
         obs = {a: self._get_obs(a) for a in self.agents}
         # Expose visibility so eval/rendering can track the hidden-fraction metric.
         infos = {a: {"seeker_sees_hider": seeker_sees, "in_prep": in_prep} for a in self.agents}
+        # Stage 7 rung metrics: is the doorway sealed by a hider-locked box, is any seeker
+        # elevated, and who holds the ramp lock — the emergence-timeline signals.
+        if self.ramp:
+            barricaded = any(
+                self.box_lock_owner[i] == "hider"
+                and 145 <= b.position.x <= 215 and 210 <= b.position.y <= 270
+                for i, b in enumerate(self.box_bodies))
+            seeker_elev = any(s in self._elevated_now for s in self.teams["seeker"])
+            for a in self.agents:
+                infos[a]["doorway_barricaded"] = barricaded
+                infos[a]["seeker_elevated"] = seeker_elev
+                infos[a]["ramp_lock_owner"] = self.ramp_lock_owner
+                infos[a]["ramp_active"] = self.ramp_active
 
         if time_up:
             self.agents = []
@@ -467,9 +741,17 @@ class HideAndSeekEnv(ParallelEnv):
         for i, body in enumerate(self.box_bodies):
             boxes.append({
                 "pos": (body.position.x, body.position.y),
-                "size": self.BOX_SIZE,
+                "size": self._box_sizes[i],
                 "locked": self.box_lock_owner[i] is not None,
             })
+        ramp = None
+        if self.ramp:
+            ramp = {
+                "pos": (self.ramp_body.position.x, self.ramp_body.position.y),
+                "size": self.RAMP_SIZE,
+                "locked": self.ramp_lock_owner is not None,
+                "active": self.ramp_active,
+            }
         in_prep = self.steps < self.PREP_STEPS
         info = {
             "phase": "PREP" if in_prep else "PLAY",
@@ -477,11 +759,12 @@ class HideAndSeekEnv(ParallelEnv):
             "step": self.steps,
             "max_steps": self.MAX_STEPS,
             "prep_fraction": self.PREP_FRACTION,
-            "hiders": self.team_size,
-            "seekers": self.team_size,
+            "hiders": self.n_hiders,
+            "seekers": self.n_seekers,
             "reward": 0.0,
         }
-        self.renderer.render(agents=agents, walls=self.walls, boxes=boxes, goal_pos=None, info=info)
+        self.renderer.render(agents=agents, walls=self.walls, boxes=boxes, ramp=ramp,
+                             goal_pos=None, info=info)
 
     def close(self):
         if self.renderer is not None:

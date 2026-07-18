@@ -10,20 +10,29 @@ import gymnasium as gym # For training environment
 # Critic: "How good is this state/action pair?" -> Outputs a single number (value)
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim, act_dim):
+    def __init__(self, obs_dim, act_dim, hidden=128):
         super().__init__()
         self.shared = nn.Sequential(
-            nn.Linear(obs_dim, 128),
+            nn.Linear(obs_dim, hidden),
             nn.Tanh(),
-            nn.Linear(128, 128),
+            nn.Linear(hidden, hidden),
             nn.Tanh(),
         )
-        self.policy_head = nn.Linear(128, act_dim)
-        self.value_head = nn.Linear(128, 1)
+        self.policy_head = nn.Linear(hidden, act_dim)
+        self.value_head = nn.Linear(hidden, 1)
         
         # When picking actions, the agent samples from a normal distribution.
         # This controls how spread out that distribution is. It starts wide (exploratory) and shrinks as it learns.
-        self.log_std = nn.Parameter(torch.zeros(act_dim)) 
+        self.log_std = nn.Parameter(torch.zeros(act_dim))
+
+    def _std(self):
+        # Clamp log_std when it's USED (the parameter itself keeps training freely).
+        # The entropy bonus puts a CONSTANT upward gradient on log_std (Gaussian entropy is
+        # sum(log_std)+const), so long runs drift it until sampling is pure noise — the
+        # 10M-step runs reached log_std ≈ +30..39 (std ~1e13: every rollout action was
+        # random bang-bang) and the first Stage 7 run eventually NaN'd from it at 19.9M
+        # steps. Clamped std keeps exploration in [0.018, 2.7].
+        return torch.exp(torch.clamp(self.log_std, -4.0, 1.0))
 
     def forward(self, x):
         # Takes the game state, runs it through the brain, returns a decision and assessment
@@ -36,7 +45,7 @@ class ActorCritic(nn.Module):
         # Forward gives the mean (center of the bell curve) for each action dimension
         # Act samples a continuous action from that bell curve
         mean, value = self.forward(obs)
-        std = torch.exp(self.log_std) # Convert log_std to std (always positive)
+        std = self._std() # Convert log_std to std (always positive, clamped to a sane range)
         dist = Normal(mean, std) # Creates a bell curve centered on the mean with width std
         action = dist.sample() # Randomly picks a value from the bell curve
         log_prob = dist.log_prob(action).sum(-1) # Log probability of the picked action (summed across action dimensions, needed for PPO math)
@@ -46,7 +55,7 @@ class ActorCritic(nn.Module):
         # Re-evaluates old decisions with current network weights
         # "What do I think about those past actions now?"
         mean, values = self.forward(obs)
-        std = torch.exp(self.log_std) # Convert log_std to std (always positive)
+        std = self._std() # Convert log_std to std (always positive, clamped to a sane range)
         dist = Normal(mean, std) # Rebuild the bell curve with current weights
         log_probs = dist.log_prob(actions).sum(-1) # Log probability of the old actions under the new bell curve (summed across action dimensions)
         entropy = dist.entropy().sum(-1) # entropy = uniformity, high entropy = high uniformity = info is spread out evenly and randomly
@@ -122,8 +131,8 @@ class RolloutBuffer():
         return adv, ret
 
 class PPO():
-    def __init__(self, obs_dim, act_dim, learning_rate=3e-4):
-        self.ac = ActorCritic(obs_dim, act_dim) # Create instance of ActorCritic
+    def __init__(self, obs_dim, act_dim, learning_rate=3e-4, hidden=128):
+        self.ac = ActorCritic(obs_dim, act_dim, hidden=hidden) # Create instance of ActorCritic
         self.buffer = RolloutBuffer() # Create instance of RolloutBuffer
         self.optimizer = optim.Adam(self.ac.parameters(), lr=learning_rate)  # Create optimizer
 
@@ -180,8 +189,10 @@ class PPO():
                 # Re-evaluate old actions with current network weights
                 log_probs, entropy, values = self.ac.evaluate(obs_batch, actions_batch)
 
-                # Calculate PPO loss
-                ratio = torch.exp(log_probs - old_log_probs_batch)
+                # Calculate PPO loss. The log-ratio is clamped before exp: an off-policy
+                # outlier can otherwise overflow ratio to inf, and min(inf * negative_adv, ...)
+                # makes the loss -inf -> NaN gradients -> dead network.
+                ratio = torch.exp(torch.clamp(log_probs - old_log_probs_batch, -20.0, 20.0))
                 # Clip the ratio to be between 1 - clip_eps and 1 + clip_eps
                 clip_adv = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages_batch
                 # Policy loss = -min(ratio * advantages, clip_adv)
@@ -191,6 +202,11 @@ class PPO():
 
                 # Total loss
                 loss = policy_loss + value_coef * value_loss - entropy_coef * entropy.mean()
+
+                # Last line of defense: never backprop a non-finite loss (one bad minibatch
+                # would permanently NaN the weights; skipping it costs nothing).
+                if not torch.isfinite(loss):
+                    continue
 
                 # Optimize the network by calculating the gradients and updating the weights
                 self.optimizer.zero_grad()

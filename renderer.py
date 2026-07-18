@@ -29,6 +29,11 @@ COLORS = {
     "box_outline": (190, 140, 30),
     "box_locked_top": (210, 165, 55),
     "box_locked_front": (180, 138, 35),
+    "ramp_top": (140, 200, 170),
+    "ramp_front": (105, 165, 135),
+    "ramp_locked_top": (110, 170, 145),
+    "ramp_locked_front": (85, 140, 115),
+    "ramp_outline": (75, 130, 105),
     "lock_body": (240, 240, 245),
     "lock_outline": (120, 100, 50),
     "goal": (100, 220, 140),
@@ -278,18 +283,60 @@ class GameRenderer:
         surface.blit(hl, (int(sp[0] - half), int(sp[1] - half)))
 
         if locked:
-            lx, ly = int(sp[0]), int(sp[1] - 1)
-            ls = max(4, int(ss * 0.18))
+            self._draw_lock_glyph(surface, int(sp[0]), int(sp[1] - 1), max(4, int(ss * 0.18)))
 
-            shackle_rect = (lx - ls + 2, ly - ls - 3, (ls - 2) * 2, ls + 2)
-            pygame.draw.arc(surface, COLORS["lock_outline"], shackle_rect, 0, math.pi, 2)
+    def _draw_lock_glyph(self, surface, lx, ly, ls):
+        shackle_rect = (lx - ls + 2, ly - ls - 3, (ls - 2) * 2, ls + 2)
+        pygame.draw.arc(surface, COLORS["lock_outline"], shackle_rect, 0, math.pi, 2)
 
-            body = pygame.Rect(lx - ls, ly - 2, ls * 2, int(ls * 1.4))
-            pygame.draw.rect(surface, COLORS["lock_body"], body, border_radius=2)
-            pygame.draw.rect(surface, COLORS["lock_outline"], body, 1, border_radius=2)
+        body = pygame.Rect(lx - ls, ly - 2, ls * 2, int(ls * 1.4))
+        pygame.draw.rect(surface, COLORS["lock_body"], body, border_radius=2)
+        pygame.draw.rect(surface, COLORS["lock_outline"], body, 1, border_radius=2)
 
-            dot_r = max(1, ls // 3)
-            pygame.draw.circle(surface, COLORS["lock_outline"], (lx, ly + int(ls * 0.3)), dot_r)
+        dot_r = max(1, ls // 3)
+        pygame.draw.circle(surface, COLORS["lock_outline"], (lx, ly + int(ls * 0.3)), dot_r)
+
+    # --- ramp (Stage 7): a wedge, drawn box-like so it sits in the same visual language ---
+
+    def _draw_ramp(self, surface, pos, size=40, locked=False):
+        sp = self._to_screen(pos)
+        ss = self._scale(size)
+        half = ss / 2
+        depth = 7
+
+        self._draw_shadow_ellipse(surface, (sp[0], sp[1] + half + 2), half * 1.1, half * 0.4, alpha=20)
+
+        top_c = COLORS["ramp_locked_top"] if locked else COLORS["ramp_top"]
+        front_c = COLORS["ramp_locked_front"] if locked else COLORS["ramp_front"]
+        outline_c = COLORS["ramp_outline"]
+
+        front = [
+            (sp[0] - half, sp[1] + half),
+            (sp[0] + half, sp[1] + half),
+            (sp[0] + half, sp[1] + half + depth),
+            (sp[0] - half, sp[1] + half + depth),
+        ]
+        pygame.draw.polygon(surface, front_c, front)
+
+        # Wedge: low at the left edge, rising to a high right face.
+        wedge = [
+            (sp[0] - half, sp[1] + half),
+            (sp[0] + half, sp[1] - half),
+            (sp[0] + half, sp[1] + half),
+        ]
+        pygame.draw.polygon(surface, top_c, wedge)
+        pygame.draw.polygon(surface, outline_c, wedge, 1)
+        pygame.draw.polygon(surface, outline_c, front, 1)
+
+        # Tread lines up the slope, for readability.
+        for f in (0.3, 0.55, 0.8):
+            x = sp[0] - half + ss * f
+            y_top = sp[1] + half - ss * f
+            pygame.draw.line(surface, outline_c, (x, sp[1] + half), (x, y_top), 1)
+
+        if locked:
+            self._draw_lock_glyph(surface, int(sp[0] + half * 0.35), int(sp[1] + half * 0.3),
+                                  max(4, int(ss * 0.18)))
 
     # --- agents ---
 
@@ -450,7 +497,7 @@ class GameRenderer:
 
     # --- main render ---
 
-    def render(self, agents, walls, boxes=None, goal_pos=None, info=None):
+    def render(self, agents, walls, boxes=None, ramp=None, goal_pos=None, info=None):
         self.frame += 1
         if info is None:
             info = {}
@@ -464,6 +511,9 @@ class GameRenderer:
             sorted_boxes = sorted(boxes, key=lambda b: b["pos"][1])
             for box in sorted_boxes:
                 self._draw_box(self.screen, box["pos"], box.get("size", 30), box.get("locked", False))
+
+        if ramp:
+            self._draw_ramp(self.screen, ramp["pos"], ramp.get("size", 40), ramp.get("locked", False))
 
         self._draw_walls(self.screen, walls)
 
