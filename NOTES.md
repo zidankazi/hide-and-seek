@@ -442,3 +442,28 @@ Stage 7 falsified the blunt Stages 5–6 conclusion in two ways. First, the "com
 - Trainer: `train_hs7.py` (team-generic, `[total] [s2_start] [s2_end] [--load/--train/--fresh/--hidden/--rollout]`). Eval: `eval_hs7.py` (1v2, single-seeker control). Demo: `watch_hs7.py`. Timeline: `timeline_hs7.py` (log→TSV).
 - Policies: `hs_ramp_{hider,seeker}_final.pt` (current 1v2 lineage), `hs_mega1v1_*.pt` (the 1v1 pure-evasion baseline). Per-run logs `train_hs7_*.log` preserved (run1…run10, phaseA–A5, mega1v1, 1v2a, 1v2brA/B, big-batch).
 - **Remaining levers (a real fork, each a substantial change to the "pure emergence" framing): (a) behavioral-cloning bootstrap of the barricade motor sequence, then RL refine; (b) LSTM policy + far-longer training (the paper's actual rung-1 recipe).**
+
+---
+
+## 2026-07-18 — Stage 7 addendum: LSTM (the paper's architecture) + vectorization
+
+Two follow-ups after the feed-forward wall: (1) test the one paper ingredient not yet replicated — memory; (2) make training fast enough to iterate.
+
+### Recurrent PPO — memory strengthens the emerged rung, doesn't crack the wall
+Built `ppo_recurrent.py` (LSTM ActorCritic; per-episode zero-hidden sequences; PPO update batched over whole episodes via packed sequences) and a 1v2 recurrent trainer. Hide-and-seek is partially observed (objects/opponents leave line-of-sight and their obs slots zero) and the barricade pays off many steps after it's built — exactly the credit-assignment memory should help.
+
+Result at 20M steps (honest eval, 200/150 eps, no assists):
+
+| rung | metric | feed-forward best | **LSTM (20M)** |
+|------|--------|-------------------|----------------|
+| 2 | seeker elevated (play) | 11.4% | **20.8%** (vs 14.9% single-seeker) |
+| 3 | ramp hider-locked | 7.0% | 0.7% |
+| 1 | doorway barricaded | 5.5% | **0.0%** |
+
+Memory nearly **doubled** rung 2 (seeker ramp transport — a multi-step, memory-friendly skill), and its training curve climbs cleanly (elev 0.13 → 0.25 over the run). But **rung 1 construction stayed at 0.0%**, with training `barr` flat at ~0.18 the whole run (below the ~0.20 assist floor — the hider doesn't even reliably convert the assisted starts). So the paper's own architecture, tested directly, **confirms rather than overturns** the finding: recurrence amplifies the tool-use that pressure already induces, and leaves precise construction untouched. That rules out architecture as the rung-1 blocker and points the remaining finger squarely at **scale** (the paper's 100M+ steps).
+
+### Vectorization — 4× faster, and a correction to the earlier "GPU" intuition
+Profiling the recurrent loop showed the bottleneck is NOT the physics (pymunk runs ~17k steps/s) but the per-step LSTM forward at batch-1 (~84% of rollout wall-clock). A GPU is useless there (batch-1, tiny nets). The fix is batching: `train_hs7_lstm_vec.py` runs N=10 env copies in one process with a single batched policy forward per step (`act_batch`), and the update batches episodes via packed sequences (`eval_batch`, numerically identical to the per-episode path, err 5e-7). Benchmarked **201 → 881 steps/s (4×)**: the 20M verdict in ~6h instead of ~15, full 40M in ~13h instead of ~43. One simplification for batching: all N envs share one frozen opponent per rollout (diversity per-rollout, still covered by the pool). Checkpoints `hs_lstm20m_*.pt`.
+
+### Stage 7 final status
+The arc, honestly: **rung 2 emerged (strongly, and more so with memory); rung 3 weak; rung 1 is a scale wall.** The load-bearing ingredient for emergence at desktop scale is multi-agent pressure, not compute — and the one rung that still needs industrial compute is precise construction, now confirmed to survive curriculum, capacity, batch size, AND recurrence. Artifact: "Pressure, Not Compute." Policies: `hs_lstm20m_*` (best rung-2), `hs_ramp_*_final` (feed-forward 1v2), `hs_mega1v1_*` (evasion baseline).
