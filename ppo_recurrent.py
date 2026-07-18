@@ -25,6 +25,7 @@ Design notes (correctness of recurrent PPO in this codebase):
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.utils.rnn  # noqa: F401  (pack_padded_sequence used in ActorCriticLSTM.eval_batch)
 import torch.optim as optim
 from torch.distributions import Normal
 
@@ -67,6 +68,27 @@ class ActorCriticLSTM(nn.Module):
         _, value, _ = self.step(obs_t, hc)
         return value
 
+    @torch.no_grad()
+    def act_batch(self, obs_b, hc):
+        """Batched one-step act over B parallel envs. obs_b: (B, obs_dim); hc: ((1,B,H),(1,B,H)).
+        Returns actions (B, act_dim), log_probs (B,), values (B,), hc2. This is the whole point
+        of vectorization: one forward for B envs instead of B forwards of one."""
+        x = self.enc(obs_b).unsqueeze(1)          # (B, 1, H)
+        out, hc2 = self.lstm(x, hc)               # (B, 1, H)
+        feat = out.squeeze(1)                     # (B, H)
+        mean = self.policy_head(feat)
+        value = self.value_head(feat).squeeze(-1)
+        dist = Normal(mean, self._std())
+        action = dist.sample()
+        log_prob = dist.log_prob(action).sum(-1)
+        return action, log_prob, value, hc2
+
+    @torch.no_grad()
+    def value_batch(self, obs_b, hc):
+        x = self.enc(obs_b).unsqueeze(1)
+        out, _ = self.lstm(x, hc)
+        return self.value_head(out.squeeze(1)).squeeze(-1)
+
     def eval_episode(self, obs_seq, act_seq):
         """Re-run the whole episode from zero hidden (grad-tracked). obs_seq: (T, obs_dim).
         Returns per-step log_probs (T,), entropy (T,), values (T,)."""
@@ -78,6 +100,24 @@ class ActorCriticLSTM(nn.Module):
         log_probs = dist.log_prob(act_seq).sum(-1)
         entropy = dist.entropy().sum(-1)
         values = self.value_head(feat).squeeze(-1)
+        return log_probs, entropy, values
+
+    def eval_batch(self, obs_pad, act_pad, lengths):
+        """Grad-tracked eval of a BATCH of padded episodes in one packed LSTM pass — the
+        update-side counterpart to act_batch. obs_pad/act_pad: (B, Tmax, ·); lengths: (B,).
+        Each episode starts from zero hidden (they are independent sequences). Returns
+        log_probs, entropy, values each (B, Tmax) — caller masks the padding."""
+        B, Tmax, _ = obs_pad.shape
+        x = self.enc(obs_pad)                     # (B, Tmax, H)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            x, lengths.cpu(), batch_first=True, enforce_sorted=False)
+        out_p, _ = self.lstm(packed)
+        out, _ = nn.utils.rnn.pad_packed_sequence(out_p, batch_first=True, total_length=Tmax)
+        mean = self.policy_head(out)              # (B, Tmax, act)
+        dist = Normal(mean, self._std())
+        log_probs = dist.log_prob(act_pad).sum(-1)
+        entropy = dist.entropy().sum(-1)
+        values = self.value_head(out).squeeze(-1)
         return log_probs, entropy, values
 
 
@@ -134,7 +174,7 @@ class RecurrentPPO:
         self.optimizer = optim.Adam(self.ac.parameters(), lr=learning_rate)
 
     def update(self, buffer, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.005,
-               value_coef=0.5, update_epochs=4, episodes_per_batch=4, log_std_floor=-4.0):
+               value_coef=0.5, update_epochs=4, episodes_per_batch=8):
         eps = buffer.episodes
         if not eps:
             return
@@ -147,34 +187,43 @@ class RecurrentPPO:
         for ep in eps:
             ep["adv"] = (ep["adv"] - a_mean) / a_std
 
+        obs_dim = eps[0]["obs"].shape[1]
+        act_dim = eps[0]["actions"].shape[1]
         idx = np.arange(len(eps))
         for _ in range(update_epochs):
             np.random.shuffle(idx)
             for start in range(0, len(idx), episodes_per_batch):
                 batch = idx[start:start + episodes_per_batch]
-                self.optimizer.zero_grad()
-                total_loss = 0.0
-                n_steps = 0
-                for j in batch:
+                B = len(batch)
+                lens = np.array([len(eps[j]["rewards"]) for j in batch])
+                Tmax = int(lens.max())
+                obs_pad = torch.zeros(B, Tmax, obs_dim)
+                act_pad = torch.zeros(B, Tmax, act_dim)
+                oldlp = torch.zeros(B, Tmax)
+                adv = torch.zeros(B, Tmax)
+                ret = torch.zeros(B, Tmax)
+                mask = torch.zeros(B, Tmax)
+                for bi, j in enumerate(batch):
                     ep = eps[j]
-                    obs = torch.tensor(ep["obs"], dtype=torch.float32)
-                    act = torch.tensor(ep["actions"], dtype=torch.float32)
-                    old_lp = torch.tensor(ep["log_probs"], dtype=torch.float32)
-                    adv = torch.tensor(ep["adv"], dtype=torch.float32)
-                    ret = torch.tensor(ep["ret"], dtype=torch.float32)
-                    log_probs, entropy, values = self.ac.eval_episode(obs, act)
-                    ratio = torch.exp(torch.clamp(log_probs - old_lp, -20.0, 20.0))
-                    clip_adv = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * adv
-                    policy_loss = -torch.min(ratio * adv, clip_adv).sum()
-                    value_loss = ((values - ret) ** 2).sum()
-                    ent = entropy.sum()
-                    total_loss = total_loss + policy_loss + value_coef * value_loss - entropy_coef * ent
-                    n_steps += len(ret)
-                if n_steps == 0:
-                    continue
-                loss = total_loss / n_steps
+                    T = len(ep["rewards"])
+                    obs_pad[bi, :T] = torch.from_numpy(ep["obs"])
+                    act_pad[bi, :T] = torch.from_numpy(ep["actions"])
+                    oldlp[bi, :T] = torch.from_numpy(ep["log_probs"])
+                    adv[bi, :T] = torch.from_numpy(ep["adv"])
+                    ret[bi, :T] = torch.from_numpy(ep["ret"])
+                    mask[bi, :T] = 1.0
+                log_probs, entropy, values = self.ac.eval_batch(
+                    obs_pad, act_pad, torch.from_numpy(lens))
+                ratio = torch.exp(torch.clamp(log_probs - oldlp, -20.0, 20.0))
+                clip_adv = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * adv
+                policy_loss = -(torch.min(ratio * adv, clip_adv) * mask).sum()
+                value_loss = (((values - ret) ** 2) * mask).sum()
+                ent = (entropy * mask).sum()
+                n = mask.sum().clamp(min=1.0)
+                loss = (policy_loss + value_coef * value_loss - entropy_coef * ent) / n
                 if not torch.isfinite(loss):
                     continue
+                self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.ac.parameters(), 0.5)
                 self.optimizer.step()
