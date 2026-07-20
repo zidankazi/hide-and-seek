@@ -467,3 +467,26 @@ Profiling the recurrent loop showed the bottleneck is NOT the physics (pymunk ru
 
 ### Stage 7 final status
 The arc, honestly: **rung 2 emerged (strongly, and more so with memory); rung 3 weak; rung 1 is a scale wall.** The load-bearing ingredient for emergence at desktop scale is multi-agent pressure, not compute — and the one rung that still needs industrial compute is precise construction, now confirmed to survive curriculum, capacity, batch size, AND recurrence. Artifact: "Pressure, Not Compute." Policies: `hs_lstm20m_*` (best rung-2), `hs_ramp_*_final` (feed-forward 1v2), `hs_mega1v1_*` (evasion baseline).
+
+---
+
+## 2026-07-20 — Stage 7 addendum: the scale test (the last untried lever) — 120M steps
+
+The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly one paper ingredient untested: **raw scale** (the paper trained 100M+ steps). Vectorization made this affordable, so we ran it definitively: warm-start both nets from `hs_lstm20m_*` and train **100M more vectorized steps** (`train_hs7_lstm_vec.py 100000000 0 0 --load=hs_lstm20m --envs=10 --steps=800 --hidden=256`), for **~120M total** — the paper's own regime. ~34h wall-clock at ~900–1000 steps/s. Honest evals (200 deterministic eps, no assists) at four checkpoints:
+
+| total steps | rung 1 barricade | rung 2 elev (both / single) | rung 3 lock | hidden |
+|-------------|------------------|-----------------------------|-------------|--------|
+| 34M | **0.0%** | 23.2% / — | — | — |
+| 39M | **0.0%** | 22.2% / 15.0% | 0.5% | 76.6% |
+| 80M | **0.0%** | 25.0% / 12.2% | 0.0% | 74.4% |
+| 120M (save-best) | **0.0%** | 12.7% / 9.0% | 1.0% | 84.7% |
+| 120M (final wts) | **0.0%** | 14.7% / 5.8% | 0.0% | 80.6% |
+
+**Verdict: scale is ruled out too. Rung 1 construction is 0.0% at every checkpoint from 34M through 120M** — not a slow climb, a hard floor. The last lever is exhausted; the exploration wall around precise box-into-doorway construction survives curriculum, capacity, batch size, recurrence, *and* paper-regime scale. In this 2D reproduction, the honest conclusion is that rung 1 needs a *different* ingredient than more of the same — demonstrations / behavioral cloning to seed the motor sequence — not just a bigger budget.
+
+**Two things the scale run clarified about rung 2:**
+- It stays **provably pressure-caused** — both-seeker elevation exceeds the single-seeker control at *every* checkpoint (25.0 vs 12.2 at 80M; 12.7 vs 9.0 at 120M). That gap is the robust result.
+- Its *absolute* level is **non-stationary**, not monotone. It peaked ~25% around 80M, then fell back to ~13% by 120M as the **hider** swung ahead in the arms race (hidden-fraction rose 74%→85%, so the seeker needed the ramp less often). This is ordinary non-transitive self-play dynamics — the emerged tool-use oscillates in amplitude while the *causal* pressure signature persists. Reporting the save-best snapshot's peak alone would overstate a fixed equilibrium that isn't there.
+
+### Stage 7 closed
+Every lever tried: entropy-runaway fix, doorway geometry, elevation assist, elevation range, live opponent ladder, level-locks, action ceiling, reverse-chained curriculum, 256 capacity, per-team std floors, 8192 batch, forgiving 72px door-box, LSTM memory, and 120M-step scale. **Result stands unchanged and is now maximally supported: multi-agent pressure — not compute — is what makes tool-use emerge at desktop scale (rung 2, robustly; rung 3 weakly); precise construction under sparse reward (rung 1) is a genuine exploration wall that scale does not close.** Scale-run log `train_hs7_lstm.log`; final policies `hs_lstm_{hider,seeker}_final.pt` (120M) and save-best `hs_lstm_{hider,seeker}.pt`.

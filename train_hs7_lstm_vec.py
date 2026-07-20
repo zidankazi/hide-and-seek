@@ -38,6 +38,7 @@ TOTAL_TIMESTEPS = _ints[0] if len(_ints) > 0 else 40_000_000   # per team (summe
 S2_START = _ints[1] if len(_ints) > 1 else 6_000_000
 S2_END = _ints[2] if len(_ints) > 2 else 12_000_000
 HIDDEN = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--hidden=")), 256))
+LOAD = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--load=")), None)
 ENTROPY_COEF = 0.005
 TEAMS = ("hider", "seeker")
 
@@ -59,6 +60,10 @@ print(f"[vec] {N_ENVS} envs x {STEPS_PER_ENV} steps = {N_ENVS*STEPS_PER_ENV}/upd
       f"obs={obs_dim} steps={TOTAL_TIMESTEPS} s2={S2_START}-{S2_END} hidden={HIDDEN}")
 
 live = {t: RecurrentPPO(obs_dim, act_dim, hidden=HIDDEN) for t in TEAMS}
+if LOAD:
+    for t in TEAMS:
+        live[t].ac.load_state_dict(torch.load(f"{LOAD}_{t}.pt"))
+    print(f"[vec] warm-started both teams from {LOAD}_*.pt")
 frozen = {t: ActorCriticLSTM(obs_dim, act_dim, hidden=HIDDEN) for t in TEAMS}
 pools = {t: [copy.deepcopy(live[t].ac.state_dict())] for t in TEAMS}
 

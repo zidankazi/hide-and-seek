@@ -476,7 +476,7 @@
   </section>
 
   <section>
-    <h2>Eleven walls, one at a time</h2>
+    <h2>Thirteen walls, one at a time</h2>
     <p>
       Each fix removed exactly one blocker and exposed the next — the debugging was the research.
       Every metric below is a 200-episode deterministic eval with no assists.
@@ -493,6 +493,8 @@
       <li><div><div class="ft">Capacity</div><div class="fd">A wider fresh network learned in 3.5M what the legacy one couldn't in 48M.</div></div></li>
       <li><div><div class="ft">Multi-agent pressure</div><div class="fd">The load-bearing one: two seekers break evasion and let tools pay off.</div></div></li>
       <li><div><div class="ft">Batch size</div><div class="fd">4× the rollout — cut gradient noise to nothing, and confirmed rung 1 is a real wall.</div></div></li>
+      <li><div><div class="ft">Recurrent memory</div><div class="fd">The paper's architecture. Nearly doubled rung 2 (20.8%) — and left rung 1 at 0.0%.</div></div></li>
+      <li><div><div class="ft">Paper-regime scale</div><div class="fd">120M steps, the last untried lever. Rung 1 held at 0.0% the whole way — scale ruled out.</div></div></li>
     </ol>
   </section>
 
@@ -505,8 +507,9 @@
         make evasion unwinnable, and tool-use appears cleanly from scratch with a legible
         arms-race curve. Where it still stops is precise construction under sparse reward — a
         genuine exploration wall, now mapped from every side: the incentive is present, the
-        gradient absent, and it's invariant to batch. <strong>Emergence needs the right pressure
-        first; only then does the last rung need industrial exploration.</strong>
+        gradient absent, and it's invariant to batch size, recurrent memory, and 120M steps of
+        paper-regime scale. <strong>Emergence needs the right pressure first; the last rung needs
+        not more compute but a different ingredient — demonstrations to seed the motor sequence.</strong>
       </p>
     </div>
   </section>
@@ -519,9 +522,10 @@
       seeker — the control isolating pressure from policy.
     </p>
     <p style="margin-top:1em">
-      Open questions left standing: does an LSTM policy or a demonstration-bootstrap clear the
-      construction wall, as the paper's 100M-step + memory recipe suggests? Full run-by-run
-      journal in <b>NOTES.md</b>.
+      The paper's own recipe — recurrent memory and 100M+ steps — was then tested directly. Memory
+      nearly doubled rung 2 but left construction at 0.0%; a 120M-step run held it at 0.0% at every
+      checkpoint. Both ruled out. The one lever left is a demonstration-bootstrap of the barricade
+      itself. Full run-by-run journal in <b>NOTES.md</b>.
     </p>
   </footer>
 
