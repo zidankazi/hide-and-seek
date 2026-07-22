@@ -20,11 +20,14 @@ from ppo_recurrent import ActorCriticLSTM
 digits = [a for a in sys.argv[1:] if a.isdigit()]
 N = int(digits[0]) if digits else 200
 SUFFIX = "_final" if "--final" in sys.argv else ""
-PREFIX = "hs_lstm"
-DOORWAY_CENTER = np.array([180.0, 240.0])
+# optional checkpoint prefix: first non-numeric, non-flag positional arg (default hs_lstm)
+_names = [a for a in sys.argv[1:] if not a.isdigit() and not a.startswith("--")]
+PREFIX = _names[0] if _names else "hs_lstm"
+LAYOUT = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--layout=")), "room")
 
-env = HideAndSeekEnv(layout="room", ramp=True, max_steps=360, lock_mode="level",
+env = HideAndSeekEnv(layout=LAYOUT, ramp=True, max_steps=360, lock_mode="level",
                      n_hiders=1, n_seekers=2, box_mass=2, door_box_size=72)
+DOORWAY_CENTER = np.array([env._door_cx, env._door_y])
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
 act_dim = env.action_space(sample).shape[0]

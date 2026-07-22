@@ -488,5 +488,29 @@ The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly
 - It stays **provably pressure-caused** — both-seeker elevation exceeds the single-seeker control at *every* checkpoint (25.0 vs 12.2 at 80M; 12.7 vs 9.0 at 120M). That gap is the robust result.
 - Its *absolute* level is **non-stationary**, not monotone. It peaked ~25% around 80M, then fell back to ~13% by 120M as the **hider** swung ahead in the arms race (hidden-fraction rose 74%→85%, so the seeker needed the ramp less often). This is ordinary non-transitive self-play dynamics — the emerged tool-use oscillates in amplitude while the *causal* pressure signature persists. Reporting the save-best snapshot's peak alone would overstate a fixed equilibrium that isn't there.
 
-### Stage 7 closed
+### Stage 7 closed (for scale)
 Every lever tried: entropy-runaway fix, doorway geometry, elevation assist, elevation range, live opponent ladder, level-locks, action ceiling, reverse-chained curriculum, 256 capacity, per-team std floors, 8192 batch, forgiving 72px door-box, LSTM memory, and 120M-step scale. **Result stands unchanged and is now maximally supported: multi-agent pressure — not compute — is what makes tool-use emerge at desktop scale (rung 2, robustly; rung 3 weakly); precise construction under sparse reward (rung 1) is a genuine exploration wall that scale does not close.** Scale-run log `train_hs7_lstm.log`; final policies `hs_lstm_{hider,seeker}_final.pt` (120M) and save-best `hs_lstm_{hider,seeker}.pt`.
+
+---
+
+## 2026-07-22 — Stage 7 addendum: RUNG 1 CRACKED — the environment must make the tool NECESSARY
+
+After scale was ruled out, three reverse-curriculum runs isolated the rung-1 wall precisely: the barricade is a two-atom skill — (1) lock-press-and-hold, (2) push-then-lock ordering. A 3-phase reverse curriculum (`train_hs7_lstm_vec_rc.py`, v2) made **lock-press emerge and hold** (Phase-B `barr`~0.6 for 9M steps — the atom no prior run reached). But **push-then-lock stayed at 0.0%**: handed a box a few px out of the doorway, the hider locks it *in place* (a premature-commitment local optimum) instead of pushing to seal. A geometric fix (v3, `_rc3`: spawn the hider above the box beyond lock-reach so descending-to-seal IS the push) also collapsed to 0.0% at the same point.
+
+**The root cause was not learnability — it was necessity.** Every honest eval's counterfactual (hider disabled) showed **78–82% hidden from room geometry alone**: plain evasion already wins, so the barricade is a *luxury* and there is no reward pressure toward the last, hardest rung. That is exactly why rung 1 never emerges under any curriculum/architecture/compute — the same logic as why rung 2 needed a *second seeker* to make evasion unwinnable. Every prior fix tried to make the push *learnable*; the real problem was that the environment never made it *necessary*.
+
+### The fix: `roomt` — a room where you can't just hide
+New layout (fully parameterized; `room`/`open` byte-identical, hashes unchanged): a **tight** corner room (walls at x/y=160 vs 240, interior ~150px) with a 60px doorway, and **seekers spawning close** to the doorway instead of across the arena. Small enough that a seeker which reaches the doorway sees the whole interior and the hider can't juke it in open space. Same obs=33 / 1 door-box+1 spare / ramp as `room`, so policies warm-start across. Trained with the v3 push-curriculum (annealed to zero — honest eval is assist-free), warm-started from the 120M base (`train_hs7_roomt.py`, `--layout=roomt`, 50M steps, `hs_roomt_*`).
+
+### Result: rung 1 EMERGED and held (honest eval, no assists, 200 eps)
+| steps | rung 1 barricade | hidden-frac | note |
+|-------|-----------------|-------------|------|
+| 14M | **25.0%** | 75.4% | first nonzero honest rung-1 in the whole project |
+| 28M | **23.0%** | 72.9% | held through the push phase that collapsed room/v2/v3 to 0.0% |
+| 50M (save-best) | **21.5%** | 78.2% | stable |
+| 50M (final) | **20.5%** | 78.9% | stable |
+
+The hider now does genuine multi-step construction unassisted — pushes box 0 from its spawn into the doorway seal-zone and locks it — **~20–25% of episodes, stable across the run**. This is the skill that was 0.0% across 120M-step scale, LSTM, and every room curriculum. **Making the tool necessary is what made it emerge**, precisely mirroring the rung-2 finding. (Non-stationary in amplitude like rung 2 — the seeker/hider arms race oscillates, seeker coverage `hid` swinging 0.75→0.54→0.73 over the honest phase — but rung-1 construction stays robustly nonzero throughout.)
+
+### The unifying result — and the honest limit on "the full arc"
+Each rung emerges **iff the environment makes that specific tool necessary**: the big `room` (dodgeable single seeker → 2 seekers) yields **rung 2** (seeker ramp-use) but not rung 1; the tight `roomt` (evasion fails) yields **rung 1** (hider barricade) but not rung 2 (close seekers don't need the ramp — elev drops to ~4%). No single tuning made all three necessary at once, so the paper's full three-rung *chain* does not co-emerge in one env at this scale. But the deeper claim is now proven in **both directions**: **emergence of a tool is gated by environmental necessity, not by compute** — construction (rung 1) was never a compute wall, it was a necessity gap, and closing that gap made it emerge. Policies `hs_roomt_{hider,seeker}.pt` / `_final`; log `train_hs7_roomt.log`; trainers `train_hs7_lstm_vec_rc.py` (v2) / `_rc3.py` (v3, push-fix) / `train_hs7_roomt.py` (roomt).

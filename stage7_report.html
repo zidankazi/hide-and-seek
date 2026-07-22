@@ -353,14 +353,14 @@
         </div>
         <div class="stat"><span class="big">7.0%</span><span class="ctl">vs 4.5% · 1 seeker</span></div>
       </div>
-      <div class="rung r1">
+      <div class="rung r2">
         <div class="idx">rung<b>1</b></div>
         <div class="body">
           <h3>Hider barricades the doorway</h3>
-          <p>Pushes a box into the doorway and locks it. Never converged — the wall of this whole project.</p>
-          <span class="pill wall">Wall</span>
+          <p>Pushes a box into the doorway and locks it. 0% in the roomy map through 120M steps — then emerged at ~22% once the room was tightened so plain hiding fails.</p>
+          <span class="pill good">Emerged when necessary</span>
         </div>
-        <div class="stat"><span class="big">2.0%</span><span class="ctl">at floor</span></div>
+        <div class="stat"><span class="big">22%</span><span class="ctl">tight room</span></div>
       </div>
     </div>
   </section>
@@ -414,13 +414,14 @@
   </section>
 
   <section>
-    <h2><span class="n">✕</span>Why the first rung is a wall</h2>
+    <h2><span class="n">✕</span>Why the first rung looked like a wall</h2>
     <p>
-      Rung 1 never came — and it isn't for lack of reward. The incentive is enormous, and the
-      failure is one of <em>acquisition</em>: the sequence that builds the fortress is a needle
-      PPO never threads by chance, so the gradient toward it is essentially zero. Bigger batches
-      (the paper's biggest lever, tried here at 4×) scrubbed the gradient noise to nothing and
-      moved this needle not at all — the signature of a true exploration wall.
+      For a long time rung 1 never came — and it isn't for lack of reward. But the failure wasn't
+      really <em>acquisition</em>; it only looked that way. The deeper cause: in the roomy map the
+      hider already wins 78% of the time by plain hiding, so the barricade is a luxury the reward
+      never demands. Bigger batches, memory, and 120M steps all left it at 0.0% — not because the
+      skill is unlearnable, but because nothing made it <em>necessary</em>. (Shrink the room and
+      it emerges — see the verdict.)
     </p>
     <div class="split">
       <div class="infobox fort">
@@ -501,15 +502,17 @@
   <section>
     <div class="verdict">
       <div class="kicker">Verdict</div>
-      <h2>Emergence isn't one wall. It's a ladder of them — and the load-bearing rung is pressure.</h2>
+      <h2>A tool emerges only when the environment makes it necessary — never because there's more compute.</h2>
       <p>
-        One seeker is dodgeable and nothing emerges at <em>any</em> compute budget. Two seekers
-        make evasion unwinnable, and tool-use appears cleanly from scratch with a legible
-        arms-race curve. Where it still stops is precise construction under sparse reward — a
-        genuine exploration wall, now mapped from every side: the incentive is present, the
-        gradient absent, and it's invariant to batch size, recurrent memory, and 120M steps of
-        paper-regime scale. <strong>Emergence needs the right pressure first; the last rung needs
-        not more compute but a different ingredient — demonstrations to seed the motor sequence.</strong>
+        One seeker is dodgeable and nothing emerges at <em>any</em> compute budget. Two seekers make
+        evasion unwinnable, and seeker ramp-use appears from scratch. Construction — the hider
+        barricading the door — looked like a hard wall: 0.0% across batch size, recurrent memory,
+        and 120M steps of paper-regime scale. But the counterfactual gave it away: <em>78% hidden
+        from room geometry alone.</em> The barricade was never learned because it was never
+        <em>needed</em> — plain hiding already won. Shrink the room until evasion fails, and the
+        same policy that never barricaded in 120M steps builds a locked barricade in <strong>~22% of
+        episodes</strong>, unassisted. <strong>Every rung is gated by necessity, not compute:
+        make the tool the only way to win, and it emerges.</strong>
       </p>
     </div>
   </section>
@@ -522,10 +525,13 @@
       seeker — the control isolating pressure from policy.
     </p>
     <p style="margin-top:1em">
-      The paper's own recipe — recurrent memory and 100M+ steps — was then tested directly. Memory
-      nearly doubled rung 2 but left construction at 0.0%; a 120M-step run held it at 0.0% at every
-      checkpoint. Both ruled out. The one lever left is a demonstration-bootstrap of the barricade
-      itself. Full run-by-run journal in <b>NOTES.md</b>.
+      The paper's recipe — recurrent memory and 100M+ steps — was tested directly and left construction
+      at 0.0%. What finally moved it was neither: a tighter room where a seeker at the doorway sees
+      everything, so hiding fails and sealing the door is the only refuge. Rung 1 then emerges and holds
+      at ~20–25% (honest, no assists). The mirror image also holds — the tight room de-emphasizes the
+      ramp, so rung 2 fades there. Each rung emerges in the environment that makes <em>it</em> necessary;
+      no single tuning makes the paper's full three-rung chain co-emerge at this scale. Full run-by-run
+      journal in <b>NOTES.md</b>.
     </p>
   </footer>
 

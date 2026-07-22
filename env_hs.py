@@ -114,7 +114,7 @@ class HideAndSeekEnv(ParallelEnv):
         action[2]>0.5 locks (level-triggered, idempotent — holding it keeps the lock);
         unlocking one's own lock is a separate EDGE-triggered press below -0.5.
         """
-        assert layout in ("room", "open")
+        assert layout in ("room", "open", "roomt")
         assert lock_mode in ("toggle", "level")
         assert team_size >= 1
         self.layout = layout
@@ -133,7 +133,29 @@ class HideAndSeekEnv(ParallelEnv):
             # Stage 7 uses 2: a lighter box shortens the contact-push needed to place it,
             # which is what makes precise barricade construction learnable under noise.
             self.BOX_MASS = float(box_mass)
-        self.N_BOXES = n_boxes if n_boxes is not None else (2 if layout == "room" else 4)
+        self.N_BOXES = n_boxes if n_boxes is not None else (4 if layout == "open" else 2)
+        # --- room geometry (parameterized so a tight room can force evasion to fail) ---
+        # "roomt" is a small corner room: once a seeker reaches the doorway it sees the whole
+        # interior, so an OPEN door means exposure and the ONLY refuge is to SEAL it — the same
+        # necessity that made rung 2 emerge, now applied to rung 1. Same obs/team/box shape as
+        # "room" (1 door-box + 1 spare, ramp) so policies warm-start across. "room" values are
+        # the exact originals (byte-identical trajectories preserved).
+        if self.layout == "roomt":
+            self.ROOM_LO, self.ROOM_HI = 40, 138          # hider/box interior spawn square
+            self._door_cx, self._door_y, self._door_hw = 115, 160, 30   # doorway x[85,145] @ y160
+            self._seal_zone = (80, 150, 128, 192)         # metric: box locked here == doorway sealed
+            self._seeker_spawn = (55, 300, 205, 430)      # just outside/below, near the doorway
+            self._room_walls = [[(160, 16), (160, 160)],  # right wall
+                                [(16, 160), (85, 160)],   # bottom wall, left of doorway
+                                [(145, 160), (160, 160)]] # bottom wall, right of doorway
+            self._box0_spawn = ((90, 140), (95, 135))     # box 0 default spawn above the doorway
+        else:
+            self.ROOM_LO, self.ROOM_HI = 40, 210
+            self._door_cx, self._door_y, self._door_hw = 180, 240, 30
+            self._seal_zone = (145, 215, 210, 270)
+            self._seeker_spawn = (300, None, 300, None)
+            self._room_walls = [list(w) for w in self.ROOM_WALLS]
+            self._box0_spawn = ((150, 205), (140, 190))
         if self.n_hiders == 1 and self.n_seekers == 1:
             self.possible_agents = ["hider", "seeker"]
         else:
@@ -182,8 +204,8 @@ class HideAndSeekEnv(ParallelEnv):
             [(10, edge), (10, 10)],
         ]
         n_edge = len(self.walls)  # arena-edge walls = WALL_CAT; interior room walls = LOW_CAT
-        if self.layout == "room":
-            self.walls += [list(w) for w in self.ROOM_WALLS]
+        if self.layout in ("room", "roomt"):
+            self.walls += [list(w) for w in self._room_walls]
         for k, (start, end) in enumerate(self.walls):
             seg = pymunk.Segment(self.space.static_body, start, end, 6)
             seg.elasticity = 0.4
@@ -486,6 +508,17 @@ class HideAndSeekEnv(ParallelEnv):
         hider_on_ramp = bool(options.get("hider_on_ramp")) if options else False
         hider_at_door = bool(options.get("hider_at_door")) if options else False
         doorway_box = options.get("doorway_box") if options else None
+        # Reverse-curriculum knob: spawn box 0 at an explicit y above the doorway (any
+        # distance) so the required barricade push can be annealed from ~zero to full.
+        # Distinct from the discrete doorway_box buckets; door_prelock optionally starts
+        # it hider-locked (a brief critic warmup that teaches "sealed = payoff").
+        door_push_y = options.get("door_push_y") if options else None
+        door_prelock = bool(options.get("door_prelock")) if options else False
+        # How far above the box to place hiders when hider_at_door: default 55 keeps them
+        # within LOCK_DIST (they can lock in place). A larger offset (> LOCK_DIST) puts the
+        # box BETWEEN the hider and the doorway, so the hider must descend through it to
+        # reach the seal — turning approach-locomotion into the push (rung-1 push curriculum).
+        hider_door_offset = float(options.get("hider_door_offset", 55.0)) if options else 55.0
         if options and options.get("doorway_sealed"):  # back-compat alias
             doorway_box = "sealed"
 
@@ -513,8 +546,11 @@ class HideAndSeekEnv(ParallelEnv):
                         (p[1] - positions[n][1]) ** 2) ** 0.5 >= min_d
                        for n in names if n in positions)
 
-        if self.layout == "room":
+        if self.layout in ("room", "roomt"):
             # Hiders inside the room; seekers outside; boxes inside near the hiders.
+            sx_lo, sx_hi, sy_lo, sy_hi = self._seeker_spawn
+            sx_hi = hi if sx_hi is None else sx_hi
+            sy_hi = hi if sy_hi is None else sy_hi
             for name in self.teams["hider"]:
                 while True:
                     p = (self.np_random.uniform(self.ROOM_LO, self.ROOM_HI),
@@ -524,8 +560,8 @@ class HideAndSeekEnv(ParallelEnv):
                 positions[name] = p
             for name in self.teams["seeker"]:
                 while True:
-                    p = (self.np_random.uniform(300, hi), self.np_random.uniform(300, hi))
-                    if clear_of(self.teams["seeker"], p, sep):  # outside the 240x240 room by construction
+                    p = (self.np_random.uniform(sx_lo, sx_hi), self.np_random.uniform(sy_lo, sy_hi))
+                    if clear_of(self.teams["seeker"], p, sep):  # outside the room by construction
                         break
                 positions[name] = p
             box_spawn = lambda: (self.np_random.uniform(self.ROOM_LO, self.ROOM_HI),
@@ -565,9 +601,9 @@ class HideAndSeekEnv(ParallelEnv):
             # doorway's sightlines and entry path. (Run 2 spawned it at y 170-210,
             # directly behind the doorway: a passive plug that killed all hunting
             # pressure and with it every gradient in the ladder.)
-            if self.ramp and self.layout == "room" and i == 0:
-                bx, by = (self.np_random.uniform(150, 205),
-                          self.np_random.uniform(140, 190))
+            if self.ramp and self.layout in ("room", "roomt") and i == 0:
+                (bx0, bx1), (by0, by1) = self._box0_spawn
+                bx, by = (self.np_random.uniform(bx0, bx1), self.np_random.uniform(by0, by1))
             else:
                 bx, by = box_spawn()
             body.position = (bx, by)
@@ -616,25 +652,39 @@ class HideAndSeekEnv(ParallelEnv):
             else:
                 self._set_ramp_static()  # parked: inert scenery until the curriculum turns it on
 
-        if self.ramp and self.layout == "room":
-            if doorway_box in ("placed", "sealed", "near"):
-                b = self.box_bodies[0]
-                by = self.np_random.uniform(185, 212) if doorway_box == "near" else 228.0
-                b.position = (self.np_random.uniform(172, 188), by)
-                b.velocity = (0, 0)
-                b.angular_velocity = 0.0
-                b.angle = 0.0
-                self.space.reindex_shapes_for_body(b)
+        if self.ramp and self.layout in ("room", "roomt"):
+            _dcx, _dy = self._door_cx, self._door_y   # room: 180/240 -> exact original numbers
+            b0 = None
+            if door_push_y is not None:
+                # Continuous reverse-curriculum spawn: box 0 at an explicit y, unlocked
+                # (push+lock both required) unless door_prelock warms up the critic.
+                b0 = self.box_bodies[0]
+                b0.position = (self.np_random.uniform(_dcx - 8, _dcx + 8), float(door_push_y))
+                b0.velocity = (0, 0)
+                b0.angular_velocity = 0.0
+                b0.angle = 0.0
+                self.space.reindex_shapes_for_body(b0)
+                if door_prelock:
+                    self._set_box_static(0)
+                    self.box_lock_owner[0] = "hider"
+            elif doorway_box in ("placed", "sealed", "near"):
+                b0 = self.box_bodies[0]
+                by = self.np_random.uniform(_dy - 55, _dy - 28) if doorway_box == "near" else (_dy - 12)
+                b0.position = (self.np_random.uniform(_dcx - 8, _dcx + 8), by)
+                b0.velocity = (0, 0)
+                b0.angular_velocity = 0.0
+                b0.angle = 0.0
+                self.space.reindex_shapes_for_body(b0)
                 if doorway_box == "sealed":
                     self._set_box_static(0)
                     self.box_lock_owner[0] = "hider"
-                if hider_at_door:
-                    n_h = len(self.teams["hider"])
-                    for j, name in enumerate(self.teams["hider"]):
-                        # just inside the room, above the box, within LOCK_DIST of it
-                        self.bodies[name].position = (b.position.x + (j - (n_h - 1) / 2) * 40,
-                                                      b.position.y - 55)
-                        self.bodies[name].velocity = (0, 0)
+            if b0 is not None and hider_at_door:
+                n_h = len(self.teams["hider"])
+                for j, name in enumerate(self.teams["hider"]):
+                    # inside the room, above the box; offset controls lock-reach vs must-push
+                    self.bodies[name].position = (b0.position.x + (j - (n_h - 1) / 2) * 40,
+                                                  b0.position.y - hider_door_offset)
+                    self.bodies[name].velocity = (0, 0)
             if ramp_locked and self.ramp_active:
                 self._set_ramp_static()
                 self.ramp_lock_owner = "hider"
@@ -709,9 +759,10 @@ class HideAndSeekEnv(ParallelEnv):
         # Stage 7 rung metrics: is the doorway sealed by a hider-locked box, is any seeker
         # elevated, and who holds the ramp lock — the emergence-timeline signals.
         if self.ramp:
+            _sx0, _sx1, _sy0, _sy1 = self._seal_zone
             barricaded = any(
                 self.box_lock_owner[i] == "hider"
-                and 145 <= b.position.x <= 215 and 210 <= b.position.y <= 270
+                and _sx0 <= b.position.x <= _sx1 and _sy0 <= b.position.y <= _sy1
                 for i, b in enumerate(self.box_bodies))
             seeker_elev = any(s in self._elevated_now for s in self.teams["seeker"])
             for a in self.agents:
