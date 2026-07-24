@@ -85,7 +85,8 @@ class HideAndSeekEnv(ParallelEnv):
 
     def __init__(self, render_mode=None, layout="room", team_size=1, n_boxes=None,
                  ramp=False, max_steps=None, lock_mode="toggle",
-                 n_hiders=None, n_seekers=None, box_mass=None, door_box_size=None):
+                 n_hiders=None, n_seekers=None, box_mass=None, door_box_size=None,
+                 seeker_speed_mult=1.0):
         """
         layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
             hider passively, so tool-use is optional.
@@ -127,6 +128,10 @@ class HideAndSeekEnv(ParallelEnv):
         self.n_seekers = n_seekers if n_seekers is not None else team_size
         assert self.n_hiders >= 1 and self.n_seekers >= 1
         self.ramp = ramp
+        # Seekers can be made faster/stronger so a same-speed hider can no longer simply
+        # outrun them — the lever that makes plain evasion fail and forces the barricade.
+        # 1.0 = original behavior (byte-identical).
+        self.seeker_speed_mult = float(seeker_speed_mult)
         if max_steps is not None:
             self.MAX_STEPS = int(max_steps)
         if box_mass is not None:
@@ -149,6 +154,7 @@ class HideAndSeekEnv(ParallelEnv):
                                 [(16, 160), (85, 160)],   # bottom wall, left of doorway
                                 [(145, 160), (160, 160)]] # bottom wall, right of doorway
             self._box0_spawn = ((90, 140), (95, 135))     # box 0 default spawn above the doorway
+            self._ramp_bands = ((175, 300), (175, 340))   # near/far: kept <400px of the small room
         else:
             self.ROOM_LO, self.ROOM_HI = 40, 210
             self._door_cx, self._door_y, self._door_hw = 180, 240, 30
@@ -156,6 +162,7 @@ class HideAndSeekEnv(ParallelEnv):
             self._seeker_spawn = (300, None, 300, None)
             self._room_walls = [list(w) for w in self.ROOM_WALLS]
             self._box0_spawn = ((150, 205), (140, 190))
+            self._ramp_bands = ((240, 330), (240, 480))   # original bands (byte-identical)
         if self.n_hiders == 1 and self.n_seekers == 1:
             self.possible_agents = ["hider", "seeker"]
         else:
@@ -623,11 +630,12 @@ class HideAndSeekEnv(ParallelEnv):
                 # (transport required). The first 30M run showed a uniform [250,480]
                 # band leaves stand-on-ramp reward too rare to ever be discovered.
                 self._set_ramp_dynamic()
+                (nlo, nhi), (flo, fhi) = self._ramp_bands   # per-layout: near / far spawn squares
                 while True:
                     if self.np_random.random() < 0.5:
-                        p = (self.np_random.uniform(240, 330), self.np_random.uniform(240, 330))
+                        p = (self.np_random.uniform(nlo, nhi), self.np_random.uniform(nlo, nhi))
                     else:
-                        p = (self.np_random.uniform(240, 480), self.np_random.uniform(240, 480))
+                        p = (self.np_random.uniform(flo, fhi), self.np_random.uniform(flo, fhi))
                     if all(((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) ** 0.5 >= 60
                            for q in positions.values()):
                         break
@@ -708,8 +716,9 @@ class HideAndSeekEnv(ParallelEnv):
                 self._prev_lock[name] = action[2] > 0.5  # track edge so it can't lock on unfreeze
                 self._prev_unlock[name] = action[2] < -0.5
                 continue
-            fx = float(action[0]) * self.FORCE_SCALE
-            fy = float(action[1]) * self.FORCE_SCALE
+            mult = self.seeker_speed_mult if self.team[name] == "seeker" else 1.0
+            fx = float(action[0]) * self.FORCE_SCALE * mult
+            fy = float(action[1]) * self.FORCE_SCALE * mult
             self.bodies[name].apply_force_at_local_point((fx, fy))
             self._handle_lock(name, float(action[2]))
 
@@ -722,13 +731,14 @@ class HideAndSeekEnv(ParallelEnv):
             if in_prep or name in self._dormant:
                 self.bodies[name].velocity = (0, 0)
 
-        # Clamp agent velocities (boxes keep their own physics).
+        # Clamp agent velocities (boxes keep their own physics). Seekers get the speed mult.
         for name in self.agents:
             body = self.bodies[name]
             vx, vy = body.velocity
             speed = (vx * vx + vy * vy) ** 0.5
-            if speed > self.MAX_VEL:
-                scale = self.MAX_VEL / speed
+            cap = self.MAX_VEL * (self.seeker_speed_mult if self.team[name] == "seeker" else 1.0)
+            if speed > cap:
+                scale = cap / speed
                 body.velocity = (vx * scale, vy * scale)
 
         self._elevated_now = self._compute_elevated()
