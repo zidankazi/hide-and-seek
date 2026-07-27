@@ -521,6 +521,9 @@ class HideAndSeekEnv(ParallelEnv):
         # it hider-locked (a brief critic warmup that teaches "sealed = payoff").
         door_push_y = options.get("door_push_y") if options else None
         door_prelock = bool(options.get("door_prelock")) if options else False
+        # split_roles (2+ hiders): put hider 0 at the door box and hider 1 at the ramp, so the
+        # division of labor rung 3 needs (one barricades, one locks the ramp) is scaffolded.
+        split_roles = bool(options.get("split_roles")) if options else False
         # How far above the box to place hiders when hider_at_door: default 55 keeps them
         # within LOCK_DIST (they can lock in place). A larger offset (> LOCK_DIST) puts the
         # box BETWEEN the hider and the doorway, so the hider must descend through it to
@@ -696,6 +699,16 @@ class HideAndSeekEnv(ParallelEnv):
             if ramp_locked and self.ramp_active:
                 self._set_ramp_static()
                 self.ramp_lock_owner = "hider"
+            hs = self.teams["hider"]
+            if split_roles and len(hs) >= 2:
+                # hider 0 -> at the door box (barricade); hider 1 -> on the ramp (lock it)
+                self.bodies[hs[0]].position = (self.box_bodies[0].position.x,
+                                               self.box_bodies[0].position.y - 55)
+                self.bodies[hs[0]].velocity = (0, 0)
+                if self.ramp_active:
+                    rp = self.ramp_body.position
+                    self.bodies[hs[1]].position = (rp.x + 45, rp.y)
+                    self.bodies[hs[1]].velocity = (0, 0)
         self.space.reindex_static()
 
         self._elevated_now = self._compute_elevated()

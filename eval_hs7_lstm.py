@@ -25,9 +25,11 @@ _names = [a for a in sys.argv[1:] if not a.isdigit() and not a.startswith("--")]
 PREFIX = _names[0] if _names else "hs_lstm"
 LAYOUT = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--layout=")), "room")
 SPEED = float(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--speed=")), 1.0))
+NH = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--nh=")), 1))
+NS = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--ns=")), 2))
 
 env = HideAndSeekEnv(layout=LAYOUT, ramp=True, max_steps=360, lock_mode="level",
-                     n_hiders=1, n_seekers=2, box_mass=2, door_box_size=72,
+                     n_hiders=NH, n_seekers=NS, box_mass=2, door_box_size=72,
                      seeker_speed_mult=SPEED)
 DOORWAY_CENTER = np.array([env._door_cx, env._door_y])
 sample = env.possible_agents[0]

@@ -488,6 +488,30 @@ The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly
 - It stays **provably pressure-caused** — both-seeker elevation exceeds the single-seeker control at *every* checkpoint (25.0 vs 12.2 at 80M; 12.7 vs 9.0 at 120M). That gap is the robust result.
 - Its *absolute* level is **non-stationary**, not monotone. It peaked ~25% around 80M, then fell back to ~13% by 120M as the **hider** swung ahead in the arms race (hidden-fraction rose 74%→85%, so the seeker needed the ramp less often). This is ordinary non-transitive self-play dynamics — the emerged tool-use oscillates in amplitude while the *causal* pressure signature persists. Reporting the save-best snapshot's peak alone would overstate a fixed equilibrium that isn't there.
 
+### 2026-07-27 — the full arc co-emerges (2v2): necessity, not compute, all the way up
+
+After rung 1 was cracked (roomt) the question became whether the *whole* three-rung chain could co-emerge in ONE environment. It could not with one hider: the arc's rung 3 (hider locks the ramp away) is a *division of labor* — one hider must barricade while another denies the ramp — and a single agent cannot be in two places. A rung-3 curriculum proved this cleanly: it drove ramp-locking to 0.20 in assisted training but **0.0% in honest eval** (taught but structurally undeployable by one hider).
+
+The unified-arc runs built up the environment that makes all three rungs necessary at once:
+- **roomt** (tight room) so plain evasion fails → rung 1 necessary;
+- **1.4× seeker speed** so a same-speed hider can't outrun the seekers (env `seeker_speed_mult`);
+- a **seeker curriculum** (episodes start with the door pre-sealed → the seeker must ramp over the wall) so rung 2 is necessary once rung 1 happens;
+- per-layout **ramp bands** so an elevated seeker can actually see into the small room (`ELEV_RANGE` geometry);
+- **two hiders** (`n_hiders=2, n_seekers=2`) + a **split-role curriculum** (`split_roles`: hider 0 → door, hider 1 → ramp) so the division of labor is scaffolded.
+
+**Result — 2v2 cold-start, 50M, honest eval (200 eps, assist-free), the full arc co-emerges:**
+| rung | save-best | final |
+|------|-----------|-------|
+| 1 — hider barricades doorway | **23.5%** | 16.5% |
+| 2 — seeker ramps over wall | 7.9% | **8.8%** |
+| 3 — hider locks ramp away | **1.5%** | **2.0%** |
+
+All three rungs nonzero and stable across checkpoints; counterfactual (hider disabled) 57% = the lowest of the project (evasion genuinely failing). rung 3 survives the curriculum fade at ~2% — where it was a hard 0.0% with one hider — confirming the division of labor is the operative mechanism. Non-stationary in amplitude (the arms race oscillates: hider-hidden swung 0.35→0.82→0.61 over the honest phase), so read the *presence* of all three rungs, not a fixed equilibrium.
+
+**Honest framing (important):** this is co-emergence under *engineered necessity + annealed curricula*, NOT the paper's pure-scale from-scratch emergence. The curricula fade to zero so the eval is legitimately assist-free, but the room, the speed asymmetry, and the skill scaffolds were designed. Stated precisely, the contribution is the **mechanism**, demonstrated in both directions: a tool emerges iff the environment makes it necessary — rung 1 was flat 0.0% through 120M steps of pure scale and appeared at 22% the moment evasion was made to fail; each rung can be switched on and off by what the environment rewards; the full chain needs the pressure AND the multi-agent structure (two hiders) that the necessity implies. Emergence at desktop scale is gated by necessity, not compute.
+
+Policies `hs_2v2_{hider,seeker}.pt`/`_final`; trainer `train_hs7_arc2v2.py`; env gains `seeker_speed_mult`, per-layout `_ramp_bands`, and `split_roles`; log `train_hs7_2v2.log`. Prior arc lineage: `train_hs7_arc.py` (1v2, `--layout`/`--speed`/`--save`/`--load-{hider,seeker}`; seeker + rung-3 curricula), `hs_arcv3_*` (rung1+rung2 co-emerge), `hs_arc4_*` (rung-3 curriculum, 1-hider limit).
+
 ### Stage 7 closed (for scale)
 Every lever tried: entropy-runaway fix, doorway geometry, elevation assist, elevation range, live opponent ladder, level-locks, action ceiling, reverse-chained curriculum, 256 capacity, per-team std floors, 8192 batch, forgiving 72px door-box, LSTM memory, and 120M-step scale. **Result stands unchanged and is now maximally supported: multi-agent pressure — not compute — is what makes tool-use emerge at desktop scale (rung 2, robustly; rung 3 weakly); precise construction under sparse reward (rung 1) is a genuine exploration wall that scale does not close.** Scale-run log `train_hs7_lstm.log`; final policies `hs_lstm_{hider,seeker}_final.pt` (120M) and save-best `hs_lstm_{hider,seeker}.pt`.
 
