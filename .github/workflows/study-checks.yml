@@ -1,4 +1,4 @@
-name: Study checks
+name: Tests
 
 on: [push, pull_request]
 
@@ -6,7 +6,7 @@ permissions:
   contents: read
 
 jobs:
-  supported-workflow:
+  test:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -16,13 +16,11 @@ jobs:
           version: "0.11.8"
           python-version: "3.13"
       - run: uv sync --locked --extra dev --extra notebook
-      - run: uv run ruff check evaluate.py demo.py build_notebook.py tests
-      - run: uv run ruff format --check evaluate.py demo.py build_notebook.py tests
+      - run: uv run ruff check evaluate.py demo.py tests
+      - run: uv run ruff format --check evaluate.py demo.py tests
       - run: uv run python -m pytest tests -q
       - run: uv run python evaluate.py --episodes 2 --output /tmp/study-smoke.json
       - run: uv run python demo.py --preset tight-room --seed 10 --output /tmp/study-demo.gif
-      - run: uv run python build_notebook.py
-      - run: git diff --exit-code -- walkthrough.ipynb
       - name: Execute notebook cells
         run: |
           uv run python - <<'PY'

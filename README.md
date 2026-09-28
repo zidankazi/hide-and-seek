@@ -1,131 +1,66 @@
 # Hide & Seek
 
-A multi-agent reinforcement learning study built with PyTorch, PettingZoo, and Pymunk.
-I implemented a 2D physics environment, PPO, self-play, and recurrent policies to explore
-whether agents would learn to use movable boxes and ramps while playing hide-and-seek.
+A 2D hide-and-seek simulation with agents trained using PPO and self-play. Built with
+PyTorch, PettingZoo, and Pymunk, based on [OpenAI's hide-and-seek experiments](https://openai.com/index/emergent-tool-use/).
 
-**Status: concluded study with partial results.** The saved agents sometimes position and
-lock boxes near a doorway and gain sightlines by approaching a ramp. I did not demonstrate
-the intended sequence of shelter construction, purposeful ramp transport, wall traversal,
-and effective ramp defense.
+The goal was to get hiders building shelters and seekers using ramps to reach them.
+The agents learned some box placement and ramp-assisted visibility, but I couldn't get
+the full sequence working. I've stopped training and kept the code, checkpoints, and results here.
 
-The project began as an attempt to reproduce behaviors from
-[OpenAI's 2019 hide-and-seek research](https://openai.com/index/emergent-tool-use/).
-This environment uses simplified 2D mechanics and hand-designed training curricula.
+![A hider placing boxes near the doorway](media/barricade.gif)
 
-## Watch the agents
-
-<table>
-<tr>
-<td width="50%"><img src="media/barricade.gif" alt="A selected tight-room episode with a hider-locked box at the doorway" /></td>
-<td width="50%"><img src="media/sightline.gif" alt="A selected room episode where ramp proximity grants a seeker a sightline through an interior wall" /></td>
-</tr>
-<tr>
-<td><b>Doorway box placement.</b> Tight-room policy, seed 10.</td>
-<td><b>Ramp-assisted visibility.</b> Room policy, seed 136. The red line shows sight that disappears without elevation.</td>
-</tr>
-</table>
-
-Blue agents hide; red agents seek. Orange objects are boxes; the green wedge is the ramp.
-These are selected examples, not typical success rates. The evaluated ramp changes visibility
-within a radius; it does not let agents cross walls. Each GIF has a matching JSON file with
-its seed, checkpoint hashes, and measurements.
+Blue agents hide, red agents seek. Orange objects are boxes and the green wedge is a ramp.
+This is a selected episode from the tight-room run (seed 10).
 
 ## Results
 
-Fresh evaluation of the saved checkpoints: 200 episodes per configuration, seeds 0–199,
-deterministic policy actions, no training spawn assists. No policies were retrained.
+200 episodes per setup, using saved policies without training spawn assists:
 
-| Configuration | Doorway box (% episodes) | Ramp sightline (% play steps) | Hider ramp lock (% episodes) |
+| Setup | Box locked at doorway | Ramp-assisted sightline | Ramp locked by hider |
 |---|---:|---:|---:|
-| `room` | 0.0% | 12.7% | 0.0% |
-| `tight-room` | 14.5% | 8.2% | 0.0% |
-| `two-hiders` | 26.5% | 10.6% | 3.0% |
+| Room, 1 hider / 2 seekers | 0.0% | 12.7% | 0.0% |
+| Tight room, 1 hider / 2 seekers | 14.5% | 8.2% | 0.0% |
+| Tight room, 2 hiders / 2 seekers | 26.5% | 10.6% | 3.0% |
 
-The doorway measure checks for a hider-locked box in a designated region. It does not test
-whether the shelter is secure. The sightline measure compares visibility with and without
-elevation at the same instant. A ramp lock is an observed action, not evidence of successful
-defense. Percentages describe these checkpoints, not reliability across training runs.
+Box placement and locking are percentages of episodes; sightlines are a percentage of play
+steps. In these runs, the ramp lets nearby agents see over walls. It doesn't let them climb
+across. A box at the doorway or a locked ramp also doesn't guarantee a successful defense.
 
-Read the [study report](docs/study.md) for metric definitions, comparison conditions, corrected
-claims, and limitations. [Raw results](results/) include all 1,800 evaluated episodes.
+The [notebook](walkthrough.ipynb) explains the measurements and shows more examples.
+[NOTES.md](NOTES.md) covers the training attempts and mistakes. Raw episode data is in [results/](results/).
 
-## Run it
+## Run
 
-Clone the repository and install the locked dependencies with [uv](https://docs.astral.sh/uv/).
-The recorded evaluation used Python 3.13 on macOS ARM64 and CPU inference.
+Requires [uv](https://docs.astral.sh/uv/). Tested with Python 3.13 on macOS; evaluation runs on CPU.
 
 ```bash
 git clone https://github.com/zidankazi/hide-and-seek.git
 cd hide-and-seek
 uv sync --locked --python 3.13
 
-# Quick check: two episodes in each of three conditions. No training.
+# Quick check, using saved weights
 uv run python evaluate.py --preset two-hiders --episodes 2
 
-# Reproduce one illustrated episode, including a GIF and metadata.
-uv run python demo.py --preset tight-room --seed 10 --output media/my-demo.gif
-
-# Re-run the full two-hider evaluation, with comparison conditions.
+# Full evaluation, including the comparison conditions
 uv run python evaluate.py --preset two-hiders --episodes 200 --output results/my-run.json
+
+# Replay the example above
+uv run python demo.py --preset tight-room --seed 10 --output media/replay.gif
 ```
 
-Other presets: `room` and `tight-room`. The default loads the historical save-best pair;
-`--final` selects the final pair explicitly. Evaluation fails if requested weights are missing.
-Exact numeric agreement across operating systems and library versions is not guaranteed.
+Other presets are `room` and `tight-room`. Add `--final` to load the last training snapshot
+instead of the saved best pair. To run the notebook, install `uv sync --locked --extra notebook`
+and select `.venv` as your kernel in VS Code or Jupyter.
 
-Open [walkthrough.ipynb](walkthrough.ipynb) for the guided tour. Its optional code cells load
-saved policies; none starts training. To execute them in VS Code or another notebook editor,
-run `uv sync --locked --extra notebook` and select this repository's `.venv` as the kernel.
+## Code
 
-## What I built
-
-- A physics environment with partial observations, team visibility rewards, movable objects,
-  locks, preparation time, and several room layouts.
-- Continuous and recurrent PPO implementations, opponent snapshot pools for self-play, and
-  batched recurrent rollouts.
-- Training experiments on policy stability, memory, team composition, geometry, and curricula.
-- Seeded checkpoint evaluation and replayable demonstrations, including a correction to an
-  early metric that counted ramp proximity as tool use.
-
-## Repository guide
-
-```text
-README.md              Overview and quick start
-walkthrough.ipynb      Guided tour with optional evaluation cells
-evaluate.py            Supported checkpoint evaluation command
-demo.py                Replay a specified episode
-hide_and_seek/         Environment, PPO, and renderer modules
-checkpoints/           Saved weights; study prefixes listed inside
-results/               Evaluation records and provenance
-media/                 Current demos and their metadata
-docs/                  Study report and experiment index
-experiments/           Historical scripts, logs, and media
-tests/                 Measurement and replay checks
-NOTES.md               Historical development journal
-```
-
-| Start here | Purpose |
-|---|---|
-| [`evaluate.py`](evaluate.py) | Supported evaluation entry point and study presets |
-| [`demo.py`](demo.py) | Replay a specified episode as a GIF |
-| [`docs/study.md`](docs/study.md) | Findings, definitions, and limits |
-| [`results/`](results/) | Recorded measurements and provenance |
-| [`env_hs.py`](hide_and_seek/env_hs.py) | Hide-and-seek environment |
-| [`ppo_recurrent.py`](hide_and_seek/ppo_recurrent.py) | Recurrent PPO implementation |
-| [`tests/`](tests/) | Measurement and reproducibility checks |
-| [`NOTES.md`](NOTES.md) | Historical journal; earlier interpretations are superseded by the report |
-
-The numbered `train_*`, `eval_*`, and `watch_*` scripts live in `experiments/scripts/`;
-training logs are in `experiments/logs/`. Saved weights live in `checkpoints/`. Use the entry
-points above for the concluded study. Experimental climbing code is outside its evaluated
-scope. See the [experiment index](docs/experiments.md).
-
-To check the supported workflow:
+- `hide_and_seek/`: environments, PPO implementations, and renderer.
+- `evaluate.py`, `demo.py`: evaluation and GIF replay.
+- `checkpoints/`: saved weights.
+- `experiments/`: older training scripts, logs, and demos. [Index](experiments/README.md).
+- `tests/`: sightline measurement and repeatability checks.
 
 ```bash
 uv sync --locked --extra dev
 uv run python -m pytest tests -q
-uv run ruff check evaluate.py demo.py build_notebook.py tests
-uv run python build_notebook.py
 ```

@@ -1,29 +1,28 @@
-# Experiment history
+# Experiments
 
-This folder preserves earlier scripts, training logs, and demo material. Their original
-filenames match the development journal. [file-map.json](file-map.json) records the moves.
+`scripts/` contains the earlier trainers and evaluators, `logs/` their training output,
+and `media/` the older demo GIFs. The filenames match those used in [NOTES.md](../NOTES.md).
 
-- `scripts/`: training, historical evaluation, and viewing scripts. Imports now point to
-  `hide_and_seek`; the research algorithms and historical command arguments remain intact.
-- `logs/`: saved training output.
-- `media/`: earlier selected GIFs. Their original captions and interpretations are superseded
-  by the [study report](../docs/study.md).
+| Scripts | Experiment |
+|---|---|
+| `train_multi.py`, `train_selfplay.py` | Tag and frozen-opponent self-play |
+| `train_hs.py`, `train_hs2.py`, `train_hs2c.py` | Box locking, open arena, and seeker curriculum |
+| `train_hs7.py` | Feed-forward policies with a ramp |
+| `train_hs7_lstm.py`, `train_hs7_lstm_vec.py` | Recurrent policies and batched rollouts |
+| `train_hs7_lstm_vec_rc*.py` | Reverse curricula for doorway placement |
+| `train_hs7_roomt.py` | Smaller room |
+| `train_hs7_arc.py`, `train_hs7_arc2v2.py` | Combined curricula and two hiders |
+| `train_hs7_climb.py` | Unfinished climbing experiment |
 
-Use `evaluate.py` and `demo.py` at the repository root for the supported study workflow.
-These older scripts often choose checkpoints relative to the working directory. For example,
-to run the historical LSTM evaluator on the two-hider checkpoint pair:
+Use the root `evaluate.py` for current results. The older evaluators retain their original
+metrics and often load weights relative to the working directory. For example:
 
 ```bash
-# From the repository root, after uv sync --locked:
+# From the repository root:
 cd checkpoints
 uv run --project .. python ../experiments/scripts/eval_hs7_lstm.py hs_2v2 2 --layout=roomt --speed=1.4 --nh=2 --ns=2
 ```
 
-This prints the legacy proximity metric, not the current sightline metric. No training runs
-are required to reproduce the final study. Training scripts retain their original convention
-of writing weights in the working directory; use a separate `runs/` directory for a new
-experiment and copy any required warm-start weights into it. Training all historical scripts
-has not been revalidated as part of the closeout.
-
-`timeline_hs7.py` reads log files from its working directory; its inputs are now under `logs/`.
-The optional climbing trainer remains an unfinished experiment, outside the final results.
+The trainers also save weights in the working directory. For a new run, use a separate
+`runs/` directory and copy any warm-start weights there. The old training scripts have not
+all been rerun during the cleanup. `timeline_hs7.py` reads the files in `logs/`.
