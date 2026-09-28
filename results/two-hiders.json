@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "created_utc": "2026-09-28T05:14:02.366642+00:00",
+  "created_utc": "2026-09-28T05:30:00.602007+00:00",
   "preset": "two-hiders",
   "environment": {
     "layout": "roomt",
@@ -45,9 +45,9 @@
     }
   },
   "source_sha256": {
-    "hide_and_seek/env_hs.py": "738c2994b92631ab4fa962c3b89a32ac51a1d0a59e30dba12b9bd97e81b6ad67",
-    "hide_and_seek/ppo_recurrent.py": "d9f9ba9fc98589becebf4bedd9522239fc3397e3e0fa4d53a8c7b5707ec00dc5",
-    "evaluate.py": "aefae6572e7fa0f816b682e5e9cfcabb2e0ba1c70317f2595029b43a7c960808",
+    "hide_and_seek/env_hs.py": "91b887c771233864b89aac47bc4f1be1ecc84afe354b0aa4778de13883f388f5",
+    "hide_and_seek/ppo_recurrent.py": "cfcb12ec312fc7806e342b4f985b86cd0a61a1cce4b8f476c16839474a2da128",
+    "evaluate.py": "550f5cb7f680dad2db12fbcbebc28f9dc65cc16df6aa8c307782398345c954ce",
     "uv.lock": "691dee9f3b5057acfa1a7af3e508740c947572e079cba66c16c6738685f4c828"
   },
   "conditions": {
@@ -6691,5 +6691,5 @@
       ]
     }
   },
-  "elapsed_seconds": 71.79240470845252
+  "elapsed_seconds": 72.64052999997512
 }
