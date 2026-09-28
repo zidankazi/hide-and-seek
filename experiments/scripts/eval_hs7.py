@@ -1,41 +1,12 @@
-"""
-Behavioral eval for Stage 7 (ramp runs). Loads <prefix>_hider.pt / <prefix>_seeker.pt (one
-shared policy per team, feed-forward or LSTM, auto-detected) and measures each rung of the
-emergent arc over N deterministic episodes with NO training assists:
+"""Evaluate saved feed-forward or LSTM policies with optional climbing mechanics.
 
-  rung 1  barricade   doorway sealed by a hider-locked box at episode end
-  rung 2  ramp use    see below — three different numbers, deliberately
-  rung 3  ramp denial ramp locked by the hider at episode end (+ where it ended up)
+Reports ramp proximity, elevation-dependent sightlines, wall-entry events, and
+ramp displacement. These are separate measurements, not a test of a complete strategy.
+Use the root evaluate.py for the current result tables.
 
-plus hidden-fraction, a single-seeker comparison (is the second seeker what forces the
-tools?), and the hider-disabled counterfactual (geometry-alone baseline).
-
-Rung 2 is reported three ways because the original single number was a proxy that read
-higher than the behavior it named (see the 2026-07-28 NOTES addendum):
-  near-ramp  the legacy metric: fraction of play steps any seeker is within RAMP_USE_DIST
-             of the ramp. Kept for comparability with every run before 2026-07-28, but it
-             fires whenever a seeker stands near the ramp, even if that reveals nothing.
-  sightline  the strict version of the same thing: steps where a seeker sees a hider AND
-             would not see it un-elevated, so the ramp is what bought the sightline. Always
-             0 when the run has ramp_xray off, since elevation then grants no sight at all.
-  climbed    fraction of episodes where a seeker physically crossed a wall or box. Only
-             possible while phased, so it cannot be reached through the doorway or faked by
-             loitering. Requires --climb; 0 otherwise.
-
-Ramp transport is reported too (mean px moved from spawn): it was assumed rather than
-measured for a long time, and it turns out to be ~1-5px, i.e. the ramp never moves.
-
-Usage:
-  python eval_hs7.py [N] [--final] [--prefix=hs_ramp]
-                     [--layout=room|roomt] [--nh=1] [--ns=2] [--speed=1.0]
-                     [--climb] [--no-xray] [--climb-steps=45]
-
-Examples:
-  python eval_hs7.py 200                       # the original Stage 7 room 1v2 eval
-  python eval_hs7.py 200 --prefix=hs_2v2 --layout=roomt --nh=2 --ns=2 --speed=1.4 --final
-  python eval_hs7.py 200 --prefix=hs_climb --layout=roomt --nh=2 --ns=2 --speed=1.4 \
-                         --climb --no-xray --climb-steps=25 --final
-"""
+Usage: python eval_hs7.py [episodes] [--prefix=hs_ramp] [--final]
+       [--layout=room|roomt] [--nh=1] [--ns=2] [--speed=1.0]
+       [--climb] [--no-xray] [--climb-steps=45]"""
 import os
 import sys
 
@@ -75,7 +46,7 @@ H0 = HIDERS[0]
 DOORWAY_CENTER = np.array([float(env._door_cx), float(env._door_y)])
 
 
-# ---- load policies, auto-detecting architecture from the checkpoint keys ----
+# load policies, auto-detecting architecture from the checkpoint keys
 def ckpt(team):
     p = f"{PREFIX}_{team}{SUFFIX}.pt"
     if SUFFIX and not os.path.exists(p):

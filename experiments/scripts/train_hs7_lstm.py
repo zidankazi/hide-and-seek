@@ -1,18 +1,6 @@
-"""
-Stage 7 recurrent trainer: 1v2 room+ramp with an LSTM policy — the paper's rung-1 recipe.
+"""Train recurrent room-and-ramp policies with one environment.
 
-Same game, env, curriculum, assists, and live opponent ladder as train_hs7.py; the only
-change is the policy is recurrent (ppo_recurrent.RecurrentPPO) so it carries memory across
-the episode. Rollouts are collected per-episode with a fresh hidden state, and the update
-backprops through each whole episode (see ppo_recurrent for the correctness argument).
-
-Both learner and frozen-opponent nets are recurrent; hidden state is maintained per agent
-and reset at every episode boundary (new_episode) and whenever a new frozen opponent is
-sampled.
-
-Usage: python train_hs7_lstm.py [total_steps] [s2_start] [s2_end] [--hidden=N] [--rollout=N]
-       (fresh nets by default; long run recommended, e.g. 40M+)
-"""
+Reset hidden states at episode boundaries and when replacing a frozen opponent."""
 
 import copy
 import random
@@ -25,7 +13,7 @@ from hide_and_seek.env_hs import HideAndSeekEnv
 from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBuffer
 
 
-# ---- config ----
+# config
 SAVE_PREFIX = "hs_lstm"
 ROLLOUT_STEPS = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--rollout=")), 8192))
 SNAPSHOT_EVERY = 100
@@ -39,7 +27,7 @@ ENTROPY_COEF = 0.005
 TEAMS = ("hider", "seeker")
 
 
-# ---- setup ----
+# setup
 env = HideAndSeekEnv(layout="room", ramp=True, max_steps=360, lock_mode="level",
                      n_hiders=1, n_seekers=2, box_mass=2, door_box_size=72)
 sample = env.possible_agents[0]
@@ -65,7 +53,7 @@ def load_frozen(opponent):
     frozen[opponent].load_state_dict(random.choice(pools[opponent]))
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -183,7 +171,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + periodic snapshot ----
+    # logging + save-best + periodic snapshot
     lsteps = min(steps_done.values())
     parts = [f"Iter {iteration}", f"Steps {lsteps}",
              f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}",

@@ -1,32 +1,7 @@
-"""
-Stage 7 trainer: room + ramp hide-and-seek, engineered for the full emergent arc:
-  rung 1  hiders barricade the doorway with a locked box
-  rung 2  seekers transport the ramp to the room and peek over the wall
-  rung 3  hiders lock the ramp away (or steal it) during prep
+"""Train feed-forward policies in the room-and-ramp environment.
 
-Now 1 hider vs 2 seekers (the paper's actual pressure): a lone seeker is dodgeable, so
-1v1 always converged to evasion (the 40M fresh-256 mega-run ended at 94.7% hidden with
-no construction). Two seekers pincer — camp the doorway + chase — which is what makes a
-sealed room the hider's only refuge. The second seeker anneals in (dormant-seeker
-curriculum, Stage 6 pattern) so the hider isn't crushed before it can learn.
-
-Carries every accumulated fix: level-triggered locks, std ceiling 1.0 + floor 0.25,
-entropy 0.005, clipped env actions, live opponent ladder (unconditional snapshots),
-graded doorway curriculum (sealed / placed+at-door / near+at-door), ramp discovery
-assists, ELEV_RANGE 400, near-band ramp spawns, tight box-0 spawn. Reward stays pure
-team LOS.
-
-Per-iteration logs carry the rung metrics (barr/elev/rlock) — the emergence timeline.
-
-Saves hs_ramp_hider.pt / hs_ramp_seeker.pt (save-best) + *_final.pt (end-of-run).
-Usage: python train_hs7.py [total_steps] [s2_start] [s2_end]
-                           [--load=prefix] [--train=hider|seeker] [--fresh=hider|seeker]
-                           [--hidden=N]
-  s2_start..s2_end: P(second seeker active) anneals 0 -> 1 over this env-step range
-  --load  warm-starts teams from prefix_{hider,seeker}.pt (arch inferred per side)
-  --train iterated-best-response mode: only that team learns, the other plays fixed
-  --fresh don't warm-start that team even under --load (fresh net at --hidden width)
-"""
+Samples frozen opponents and curriculum spawn states for box and ramp interaction.
+Saves both best-return and final checkpoints."""
 
 import copy
 import random
@@ -40,7 +15,7 @@ from hide_and_seek.env_hs import HideAndSeekEnv
 from hide_and_seek.ppo_continuous import PPO, ActorCritic, RolloutBuffer
 
 
-# ---- config ----
+# config
 SAVE_PREFIX = "hs_ramp"
 # 8192 (was 2048): the paper's biggest lever I hadn't pulled. Hider construction shows
 # the classic near-zero-gradient hard-exploration signature (std never anneals); a 4x
@@ -61,7 +36,7 @@ ENTROPY_COEF = 0.005
 TEAMS = ("hider", "seeker")
 
 
-# ---- setup ----
+# setup
 env = HideAndSeekEnv(layout="room", ramp=True, max_steps=360, lock_mode="level",
                      n_hiders=1, n_seekers=2, box_mass=2, door_box_size=72)
 sample = env.possible_agents[0]
@@ -97,7 +72,7 @@ def second_seeker_prob(steps):
 
 def sample_opponent(learner):
     # 50% newest snapshot, 50% uniform history (live ladder; improvement-gated pools
-    # froze and made agents overfit stale opponents — run 6 lesson).
+    # froze and made agents overfit stale opponents; run 6 lesson).
     global frozen_net
     opponent = "seeker" if learner == "hider" else "hider"
     pool = pools[opponent]
@@ -166,7 +141,7 @@ def update_team(team, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2,
             ppo.optimizer.step()
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -268,7 +243,7 @@ while min(steps_done[t] for t in LEARNERS) < TOTAL_TIMESTEPS:
         update_team(learner, obs, done)
         # Exploration floor AND ceiling on the parameter itself, PER TEAM: seekers need
         # a noise floor to keep searching (0.25), but that same floor makes the hider's
-        # precision task — pushing a 44px box into a ~20px doorway window — physically
+        # precision task; pushing a 44px box into a ~20px doorway window; physically
         # unlearnable, so hiders may anneal nearly deterministic (0.05). Ceiling 1.0
         # because clipped [-1,1] actions make mu irrelevant beyond that (and a one-sided
         # clamp would strand the param above the ceiling with zero gradient).
@@ -276,7 +251,7 @@ while min(steps_done[t] for t in LEARNERS) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + periodic snapshot ----
+    # logging + save-best + periodic snapshot
     lsteps = min(steps_done[t] for t in LEARNERS)
     parts = [f"Iter {iteration}", f"Steps {lsteps}"]
     parts.append(f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}")

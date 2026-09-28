@@ -1,19 +1,6 @@
-"""
-Stage 5b self-play trainer for the hide-and-seek env (HideAndSeekEnv, 1v1).
+"""Train one hider and one seeker with frozen-opponent self-play.
 
-Structurally identical to train_selfplay.py (quality-ladder opponent pool, snapshot on
-improvement, paired snapshots) — the only changes are the env and the save filenames.
-We keep the Stage 4 tag policies (hider.pt / seeker.pt) untouched and save here to
-hs_hider.pt / hs_seeker.pt.
-
-Reward reminder (LOS, play phase only): each play step the seeker gets +1/PLAY_STEPS when it
-can see the hider, the hider gets it when unseen, so a full episode return is in [-1, +1]:
-  hider return  = fraction of the play phase spent HIDDEN, minus fraction seen
-  seeker return = the negation
-So "save best hider" = most-hidden, "save best seeker" = most-seeing. The hider metric
-saturates near +1 while the seeker is weak (the room walls hide it by default), so paired
-snapshotting captures "the hider that survives against this generation of seekers."
-"""
+Uses the room or open layout and saves hs_* or hs_open_* checkpoints."""
 
 import copy
 import random
@@ -26,7 +13,7 @@ from hide_and_seek.env_hs import HideAndSeekEnv
 from hide_and_seek.ppo_continuous import PPO, ActorCritic
 
 
-# ---- config ----
+# config
 # layout: "room" (Stage 5b, default) or "open" (Stage 5b-ii, forces fort-building).
 LAYOUT = sys.argv[1] if len(sys.argv) > 1 else "room"
 SAVE_PREFIX = "hs" if LAYOUT == "room" else "hs_open"
@@ -35,7 +22,7 @@ TOTAL_TIMESTEPS = 2_000_000   # per agent
 ENTROPY_COEF = 0.02
 
 
-# ---- setup ----
+# setup
 env = HideAndSeekEnv(layout=LAYOUT)
 print(f"[train_hs] layout={LAYOUT} saving to {SAVE_PREFIX}_*.pt")
 sample = env.possible_agents[0]
@@ -61,7 +48,7 @@ def frozen_action(obs):
     return action.squeeze(0).numpy()
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {name: float("-inf") for name in env.possible_agents}
 steps_done = {name: 0 for name in env.possible_agents}
 episode_returns = {name: [] for name in env.possible_agents}
@@ -113,7 +100,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
 
         live[learner].update(obs[learner], done, entropy_coef=ENTROPY_COEF)
 
-    # ---- logging + save-best + paired snapshot ----
+    # logging + save-best + paired snapshot
     parts = [f"Iter {iteration}", f"Steps {min(steps_done.values())}"]
     parts.append(f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}")
 

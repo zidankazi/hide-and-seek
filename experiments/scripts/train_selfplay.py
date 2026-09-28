@@ -1,17 +1,7 @@
-"""
-Self-play training loop for the tag env. Fixes Stage 3's non-stationarity collapse
-by training each live agent against a *frozen* opponent sampled from a pool of past
-snapshots, instead of against the live (constantly-changing) opposite agent.
+"""Train tag policies against frozen opponent snapshots.
 
-Per iteration:
-  Rollout A: live hider plays vs a sampled-frozen seeker. Only the hider stores
-             transitions and updates. New frozen seeker is sampled at each env reset.
-  Rollout B: mirror - live seeker vs sampled-frozen hider. Only the seeker updates.
-  After each rollout, if the live policy beat its all-time best mean return, deep-copy
-  its state_dict into its own pool so future opponents include this improved version.
-  Snapshot-on-improvement (instead of every K iters) keeps the pool a quality ladder
-  rather than a time series of mostly-untrained noise.
-"""
+Alternate hider and seeker rollouts. Add paired snapshots to the pools when either
+team improves against its sampled opponents."""
 
 import copy
 import random
@@ -23,7 +13,7 @@ from hide_and_seek.env import TagEnv
 from hide_and_seek.ppo_continuous import PPO, ActorCritic
 
 
-# ---- config ----
+# config
 ROLLOUT_STEPS = 2048
 TOTAL_TIMESTEPS = 2_000_000   # per agent (so total env steps is ~2x this)
 ENTROPY_COEF = 0.02
@@ -33,7 +23,7 @@ ENTROPY_COEF = 0.02
 # ladder of progressively better past selves.
 
 
-# ---- setup ----
+# setup
 env = TagEnv()
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
@@ -54,7 +44,7 @@ pools = {
 }
 
 
-# ---- helpers ----
+# helpers
 def sample_opponent(learner):
     """
     Pick a random snapshot from the opponent's pool and load it into frozen_net.
@@ -72,7 +62,7 @@ def frozen_action(obs):
     return action.squeeze(0).numpy()
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {name: float("-inf") for name in env.possible_agents}
 steps_done = {name: 0 for name in env.possible_agents}  # per-agent counters
 episode_returns = {name: [] for name in env.possible_agents}  # cleared each iteration
@@ -137,7 +127,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
         # (or zero it out if the rollout ended exactly on a done).
         live[learner].update(obs[learner], done, entropy_coef=ENTROPY_COEF)
 
-    # ---- logging + save-best + snapshot-on-improvement ----
+    # logging + save-best + snapshot-on-improvement
     # Build the log line piece by piece so we can skip roles that didn't finish any
     # episodes this iteration (rare, but possible).
     parts = [f"Iter {iteration}", f"Steps {min(steps_done.values())}"]

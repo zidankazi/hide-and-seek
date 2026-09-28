@@ -1,23 +1,6 @@
-"""
-Stage 5c self-play trainer: 2v2 hide-and-seek at scale (open arena, 6 boxes, 10M env
-steps per team, pure LOS reward — no shaping).
+"""Train shared policies for two hiders and two seekers in an open arena.
 
-Same quality-ladder structure as train_hs.py, generalized to teams:
-  - ONE policy per team, shared by both teammates (paper-style parameter sharing). Each
-    teammate acts from its own masked obs; both teammates' transitions train the policy.
-  - GAE must walk a single agent's trajectory, so each teammate gets its OWN rollout
-    buffer; per-member advantages/returns are computed separately and concatenated for
-    the minibatch update (update_team below — the loop body matches PPO.update).
-  - Opponent pool is per-TEAM: one frozen net drives both opponent members, sampled from
-    the opponent team's pool each episode.
-
-Reward reminder (team LOS, play phase only): seekers get +1/PLAY_STEPS when ANY seeker
-sees ANY hider, hiders get it when ALL are unseen. Teammates share the reward exactly, so
-per-member episode returns are identical and we track member 0's.
-
-Saves best to hs_2v2_hider.pt / hs_2v2_seeker.pt. Stage 4/5b policies untouched.
-Usage: python train_hs2.py [total_env_steps_per_team]   (default 10M; small value = smoke test)
-"""
+Each agent has its own rollout buffer; updates combine the per-agent advantages."""
 
 import copy
 import random
@@ -31,7 +14,7 @@ from hide_and_seek.env_hs import HideAndSeekEnv
 from hide_and_seek.ppo_continuous import PPO, ActorCritic, RolloutBuffer
 
 
-# ---- config ----
+# config
 TEAM_SIZE = 2
 N_BOXES = 6
 LAYOUT = "open"
@@ -42,7 +25,7 @@ ENTROPY_COEF = 0.02
 TEAMS = ("hider", "seeker")
 
 
-# ---- setup ----
+# setup
 env = HideAndSeekEnv(layout=LAYOUT, team_size=TEAM_SIZE, n_boxes=N_BOXES)
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
@@ -112,7 +95,7 @@ def update_team(team, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2,
             ppo.optimizer.step()
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -169,7 +152,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
 
         update_team(learner, obs, done)
 
-    # ---- logging + save-best + paired snapshot ----
+    # logging + save-best + paired snapshot
     parts = [f"Iter {iteration}", f"Steps {min(steps_done.values())}"]
     parts.append(f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}")
 
@@ -196,7 +179,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
     print(" | ".join(parts))
 
 # Also save the FINAL live weights. Save-best can saturate early (a team that scores a
-# perfect mean vs the weak early opponent pool can never "improve" again — the 10M run's
+# perfect mean vs the weak early opponent pool can never "improve" again; the 10M run's
 # seeker hit +1.000 at iter 4 and froze there), so the end-of-run policies are the only
 # faithful "fully trained" snapshot.
 for t in TEAMS:

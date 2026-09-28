@@ -28,7 +28,7 @@ class ActorCritic(nn.Module):
     def _std(self):
         # Clamp log_std when it's USED (the parameter itself keeps training freely).
         # The entropy bonus puts a CONSTANT upward gradient on log_std (Gaussian entropy is
-        # sum(log_std)+const), so long runs drift it until sampling is pure noise — the
+        # sum(log_std)+const), so long runs drift it until sampling is pure noise; the
         # 10M-step runs reached log_std ≈ +30..39 (std ~1e13: every rollout action was
         # random bang-bang) and the first Stage 7 run eventually NaN'd from it at 19.9M
         # steps. Clamped std keeps exploration in [0.018, 2.7].
@@ -91,19 +91,7 @@ class RolloutBuffer():
         self.values = []
 
     def compute_returns(self, last_value, gamma=0.99, lam=0.95):
-        """
-        Walks backwards through steps to figure out which actions actually deserve credit
-        Computes advantages (was this action better than expected?) and returns (total future reward)
-        Gamma = discount factor, with gamma = 0.99:
-            Step 0 reward is worth: 1
-            Step 1 reward is worth: 1 * 0.99 = 0.99
-            Step 2 reward is worth: 1 * 0.99 * 0.99 = 0.98
-        Lambda = how far back do I spread credit?
-            It mostly credits recent actions but still gives some credit to actions further back
-            If Lambda was 1, spread credit way back and trust the full process
-            If Lambda was 0, only credit the most recent step
-            Lambda is 0.95, good balance that mostly credits recent actions
-        """
+        """Compute generalized advantage estimates and discounted returns backward through the rollout."""
         gae = 0 # Generalized Advantage Estimation
         advantages = [] 
 
@@ -145,16 +133,7 @@ class PPO():
         self.buffer.store(obs, action, log_prob, reward, done, value)
 
     def update(self, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2, entropy_coef=0.01, value_coef=0.5, update_epochs=4, batch_size=64): 
-        """
-        By the time we call update, we've already collected a bunch of experience and stored it in the buffer.
-        Now we need to use that experience to update the network weights.
-        We do this by:
-        1. Computing the advantages and returns
-        2. Converting the buffer lists to PyTorch tensors
-        3. Normalizing the advantages to help training
-        4. Training the network
-        5. Clearing the buffer
-        """
+        """Update the policy and value network from minibatches of rollout data."""
         last_obs_t = torch.tensor(last_obs, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad(): 
             _, last_value = self.ac(last_obs_t) # Calls forward, puts values in last_value

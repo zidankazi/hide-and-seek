@@ -1,20 +1,7 @@
-"""
-Vectorized recurrent Stage 7 trainer — same game/curriculum/reward as train_hs7_lstm.py,
-but runs N env copies in ONE process and does a single BATCHED policy forward per step.
+"""Train recurrent policies across several environments in one process.
 
-Why this is the speedup: profiling showed the bottleneck is the per-step LSTM forward at
-batch-1 (~84% of rollout wall-clock); physics is cheap (~17k steps/s). Batching N envs'
-observations into one forward amortizes that cost N-fold. No multiprocessing — just a list
-of envs, batched act, and per-env hidden state carried as (1, N*|members|, H) tensors.
-
-One simplification vs the single-env trainer: all N envs face the SAME frozen opponent for
-a given rollout (resampled from the live pool each rollout), so the opponent forward also
-batches. Opponent diversity is per-rollout instead of per-episode — the pool ladder still
-covers the space over training.
-
-Usage: python train_hs7_lstm_vec.py [total_steps] [s2_start] [s2_end]
-                                    [--envs=N] [--steps=per_env] [--hidden=N]
-"""
+Batch policy forward passes across environments. Each rollout uses one frozen
+opponent snapshot; each agent keeps its own hidden state."""
 
 import copy
 import random
@@ -29,7 +16,7 @@ from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBu
 torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))  # use the cores for the update matmuls
 
 
-# ---- config ----
+# config
 SAVE_PREFIX = "hs_lstm"
 N_ENVS = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--envs=")), 12))
 STEPS_PER_ENV = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--steps=")), 1000))
@@ -100,7 +87,7 @@ def zero_hidden_slots(hc, rows):
         hc[1][:, row, :] = 0.0
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -134,16 +121,16 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
         hc_o = frozen[opponent].init_hidden(N_ENVS * no)
 
         for _ in range(STEPS_PER_ENV):
-            # --- batched learner forward over (env, member) ---
+            # batched learner forward over (env, member)
             lob = np.stack([obs[e][m] for e in range(N_ENVS) for m in Ml]).astype(np.float32)
             la, llp, lval, hc_l = live[learner].ac.act_batch(torch.from_numpy(lob), hc_l)
             la = la.numpy(); llp = llp.numpy(); lval = lval.numpy()
-            # --- batched opponent forward ---
+            # batched opponent forward
             oob = np.stack([obs[e][m] for e in range(N_ENVS) for m in Mo]).astype(np.float32)
             oa, _, _, hc_o = frozen[opponent].act_batch(torch.from_numpy(oob), hc_o)
             oa = oa.numpy()
 
-            # --- assemble action dicts, step each env ---
+            # assemble action dicts, step each env
             done_rows = []
             for e in range(N_ENVS):
                 env = envs[e]
@@ -213,7 +200,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + snapshot ----
+    # logging + save-best + snapshot
     lsteps = min(steps_done.values())
     parts = [f"Iter {iteration}", f"Steps {lsteps}",
              f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}",

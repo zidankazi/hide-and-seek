@@ -1,13 +1,6 @@
-"""
-Behavioral eval for Stage 5b. Loads hs_hider.pt / hs_seeker.pt and, over N episodes,
-measures not just hidden-fraction but WHETHER the hider is actually using tools:
-  - lock events (did the hider lock a box during prep?)
-  - min box->doorway distance at end of prep (did a box get pushed into the doorway?)
-  - hidden-fraction during the play phase
+"""Evaluate early hide-and-seek policies: visibility, box locks, and doorway distance.
 
-Also runs a counterfactual: the same seeker vs a "frozen-box" hider (hider policy disabled,
-boxes never move) to see how much of the hiding is the walls alone vs the hider's doing.
-"""
+Includes a zero-action-hider comparison. Load weights from the working directory."""
 import sys
 import numpy as np
 import torch

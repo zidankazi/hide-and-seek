@@ -1,10 +1,4 @@
-"""
-Watch random policies in the Stage 5 hide-and-seek env. Useful for eyeballing the room
-geometry, prep-phase freeze, and box pushing before training. Quit by closing the window.
-
-The hider is nudged toward the nearest box during the prep phase so you can see boxes get
-shoved around (a purely random hider barely touches them). Seeker acts randomly.
-"""
+"""View random hide-and-seek policies, nudging the hider toward a box during preparation."""
 
 import numpy as np
 

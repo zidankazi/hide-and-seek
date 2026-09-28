@@ -1,26 +1,8 @@
-"""
-Recurrent (LSTM) PPO for Stage 7 — the paper's actual rung-1 recipe: memory.
+"""Recurrent PPO with per-agent LSTM state.
 
-Why memory helps where the feed-forward policy walled: hide-and-seek is partially
-observed (boxes, ramp, and opponents drop out of line-of-sight and their obs slots
-zero), and the barricade is a *multi-step* construction whose value only pays off many
-steps later. An LSTM lets the policy carry "I am mid-build; the box is just below me even
-though I can't see it this frame" across the sequence, which is exactly the credit-
-assignment the feed-forward net couldn't do (its exploration std never annealed → no
-gradient toward the multi-step skill).
-
-Design notes (correctness of recurrent PPO in this codebase):
-- Every episode in a rollout starts from a FRESH env reset (train_hs7 calls new_episode()
-  at rollout start and after every done), so each episode is an independent sequence with
-  zero initial hidden state. We therefore store rollouts as a list of per-episode sequences
-  and, in the update, re-run the LSTM over each whole episode from zero hidden — no stored
-  hidden states, no cross-episode leakage, no BPTT-through-reset hazards.
-- Minibatching is over EPISODES (not shuffled timesteps), because shuffling timesteps would
-  destroy the sequences the LSTM needs. With ~22 episodes per 8192-step rollout that is a
-  fine granularity; advantages are normalized across the whole rollout first.
-- log_std uses the same clamp discipline as the feed-forward version ([-4, 0] → std in
-  [0.018, 1.0]); the ratio and finite-loss guards are carried over verbatim.
-"""
+Rollouts store whole episodes starting from zero hidden state. Updates batch episode
+sequences, recomputing hidden state rather than using states from an older policy.
+Exploration standard deviation is clamped, as in the feed-forward implementation."""
 
 import numpy as np
 import torch
@@ -70,9 +52,9 @@ class ActorCriticLSTM(nn.Module):
 
     @torch.no_grad()
     def act_batch(self, obs_b, hc):
-        """Batched one-step act over B parallel envs. obs_b: (B, obs_dim); hc: ((1,B,H),(1,B,H)).
-        Returns actions (B, act_dim), log_probs (B,), values (B,), hc2. This is the whole point
-        of vectorization: one forward for B envs instead of B forwards of one."""
+        """Sample actions for a batch of agents while keeping their hidden states separate.
+
+        obs_b has shape (B, obs_dim); hidden and cell states have shape (1, B, H)."""
         x = self.enc(obs_b).unsqueeze(1)          # (B, 1, H)
         out, hc2 = self.lstm(x, hc)               # (B, 1, H)
         feat = out.squeeze(1)                     # (B, H)
@@ -103,10 +85,11 @@ class ActorCriticLSTM(nn.Module):
         return log_probs, entropy, values
 
     def eval_batch(self, obs_pad, act_pad, lengths):
-        """Grad-tracked eval of a BATCH of padded episodes in one packed LSTM pass — the
-        update-side counterpart to act_batch. obs_pad/act_pad: (B, Tmax, ·); lengths: (B,).
-        Each episode starts from zero hidden (they are independent sequences). Returns
-        log_probs, entropy, values each (B, Tmax) — caller masks the padding."""
+        """Evaluate padded episode batches with packed LSTM sequences.
+
+        obs_pad and act_pad have shape (B, Tmax, features); lengths has shape (B,).
+        Each episode starts from zero hidden state. Returned tensors have shape
+        (B, Tmax); the caller masks padding before computing the loss."""
         B, Tmax, _ = obs_pad.shape
         x = self.enc(obs_pad)                     # (B, Tmax, H)
         packed = nn.utils.rnn.pack_padded_sequence(
@@ -155,7 +138,7 @@ class EpisodeBuffer:
 
 
 def compute_gae(rewards, values, last_value, gamma=0.99, lam=0.95):
-    """GAE over one episode (no dones inside — an episode is one uninterrupted sequence)."""
+    """Compute GAE over one complete episode."""
     T = len(rewards)
     adv = np.zeros(T, dtype=np.float32)
     gae = 0.0

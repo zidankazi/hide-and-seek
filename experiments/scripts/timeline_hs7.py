@@ -1,11 +1,6 @@
-"""
-Extract the Stage 7 emergence timeline from the training logs: per-bucket means of
-the rung metrics (barr/elev/rlock), returns, and exploration std across the whole
-run chain, as TSV on stdout. This is the data behind the paper-style
-"phases of emergent strategy" chart.
+"""Summarize training logs in iteration buckets and print TSV.
 
-Usage: python timeline_hs7.py train_hs7_run5.log train_hs7_run6.log ... [bucket_iters]
-"""
+Usage: python timeline_hs7.py <log> [more_logs...] [bucket_iters]"""
 import re
 import sys
 

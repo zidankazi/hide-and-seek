@@ -1,7 +1,4 @@
-"""Re-evaluate saved policies. No training or curriculum spawn assists.
-
-Run `uv run python evaluate.py --help` for the supported study configurations.
-"""
+"""Evaluate saved policies without training spawn assists. See --help for options."""
 
 import argparse
 import hashlib

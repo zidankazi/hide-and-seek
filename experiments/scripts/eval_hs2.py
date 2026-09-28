@@ -1,17 +1,7 @@
-"""
-Behavioral eval for the 2v2 scale-up run. Loads hs_2v2_hider.pt / hs_2v2_seeker.pt
-(one shared policy per team, best-vs-best) and, over N episodes, measures whether the
-hider team actually builds cover:
-  - team hidden-fraction during the play phase (hidden = NO seeker sees ANY hider)
-  - episodes where the hider team locked at least one box
-  - mean number of hider-locked boxes at episode end (fort size proxy)
-  - counterfactual: both hiders disabled (boxes never move) -> hidden-fraction from
-    geometry alone; the delta is the hider team's active contribution
+"""Evaluate the early feed-forward team policies.
 
-Usage: python eval_hs2.py [N] [--final] [--prefix=hs_2v2c]
-(default 200 eps, prefix hs_2v2; --final loads the end-of-run *_final.pt weights
-instead of the save-best ones, which can saturate early)
-"""
+Reports hidden time and box locking. Use --prefix=hs_2v2c and --final for the
+seeker-curriculum snapshots; the hs_2v2 prefix was reused by a later LSTM run."""
 import sys
 import numpy as np
 import torch

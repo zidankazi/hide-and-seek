@@ -1,26 +1,9 @@
-"""
-Stage 6 curriculum trainer: 2v2 hide-and-seek, second seeker ramped in mid-run.
+"""Train two-hider policies while gradually introducing a second seeker.
 
-Stage 5c showed 2v2-from-scratch hands the game to the seekers: hiders never find a
-learnable gradient (two seekers cover sightlines superlinearly and the ANY-hider team
-reward zeroes both hiders on one exposure). Curriculum fix: episodes start 2-hiders-vs-1
-(the second seeker DORMANT — frozen all episode, excluded from LOS; env keeps the full
-2v2 obs layout so policies transfer), then P(second seeker active) anneals 0 -> 1 between
-RAMP_START and RAMP_END env steps. Reward stays pure LOS — the curriculum changes who
-plays, never what is rewarded.
+Dormant seekers contribute no transitions. Reset the best-return score when the
+curriculum ends and save final weights separately.
 
-Differences from train_hs2.py beyond the ramp:
-  - Dormant seekers act zeros and their transitions are NOT stored (frozen bodies get
-    team rewards uncorrelated with their actions — pure credit-assignment noise).
-  - When the ramp completes, best_mean_return resets to -inf: pre-ramp returns come from
-    an easier game, and 5c showed a saturated save-best freezes checkpoints (its seeker
-    checkpoint was iter-4). Post-reset, save-best reflects the full 2v2 game only.
-  - *_final.pt end-of-run weights are saved as in train_hs2.py.
-
-Saves hs_2v2c_hider.pt / hs_2v2c_seeker.pt (+ *_final.pt).
-Usage: python train_hs2c.py [total_env_steps_per_team] [ramp_start] [ramp_end]
-       (defaults 10M / 4M / 6M; small values = smoke test)
-"""
+Usage: python train_hs2c.py [total_steps] [ramp_start] [ramp_end]"""
 
 import copy
 import random
@@ -34,7 +17,7 @@ from hide_and_seek.env_hs import HideAndSeekEnv
 from hide_and_seek.ppo_continuous import PPO, ActorCritic, RolloutBuffer
 
 
-# ---- config ----
+# config
 TEAM_SIZE = 2
 N_BOXES = 6
 LAYOUT = "open"
@@ -47,7 +30,7 @@ ENTROPY_COEF = 0.02
 TEAMS = ("hider", "seeker")
 
 
-# ---- setup ----
+# setup
 env = HideAndSeekEnv(layout=LAYOUT, team_size=TEAM_SIZE, n_boxes=N_BOXES)
 sample = env.possible_agents[0]
 obs_dim = env.observation_space(sample).shape[0]
@@ -124,7 +107,7 @@ def update_team(team, last_obs, last_done, gamma=0.99, lam=0.95, clip_eps=0.2,
             ppo.optimizer.step()
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -195,7 +178,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
 
         update_team(learner, obs, done)
 
-    # Once the ramp completes, pre-ramp bests came from an easier game — reset so
+    # Once the ramp completes, pre-ramp bests came from an easier game; reset so
     # save-best tracks the full 2v2 game (the 5c saturation lesson).
     if not ramp_done_reset and min(steps_done.values()) >= RAMP_END:
         best_mean_return = {t: float("-inf") for t in TEAMS}
@@ -203,7 +186,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
         print(f"[curriculum] ramp complete at {min(steps_done.values())} steps — "
               f"save-best reset, checkpoints now reflect full 2v2 only")
 
-    # ---- logging + save-best + paired snapshot ----
+    # logging + save-best + paired snapshot
     parts = [f"Iter {iteration}", f"Steps {min(steps_done.values())}"]
     parts.append(f"Pools h={len(pools['hider'])} s={len(pools['seeker'])}")
     p_now = second_seeker_prob(min(steps_done.values()))

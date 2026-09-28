@@ -1,11 +1,4 @@
-"""
-Quick sanity check for env.py. Runs random policies for both agents over a handful of
-episodes and prints what happened. We're not training, just checking that:
-    - obs / reward / termination dicts are shaped right
-    - episodes actually end (by tag or by timeout)
-    - rewards are zero-sum like we designed
-    - both ending paths fire at least sometimes
-"""
+"""Run random tag policies and print episode lengths, endings, and returns."""
 
 import numpy as np
 from hide_and_seek.env import TagEnv

@@ -1,38 +1,6 @@
-"""
-Reverse-curriculum v3 — same 3-phase schedule as v2, with the Phase-C PUSH FIX.
+"""Train two hiders with combined doorway and ramp curricula.
 
-v2 result: Phase A (sealed value) and Phase B (lock-press) both emerged and held, but
-Phase C collapsed to barr=0.00 — handed a box slightly out of the doorway, the hider
-locked it IN PLACE (a premature-commitment local optimum) instead of pushing it to seal.
-v3 breaks that trap geometrically: in Phase C the hider is always spawned ABOVE the box
-by an offset that grows past LOCK_DIST, so the box sits between the hider and the doorway
-and the hider must descend THROUGH it to reach the seal — turning approach-locomotion into
-the push. Nothing else changes. Warm-start from the clean 120M base (re-teaches A/B, which
-we know work) rather than v2's decayed honest-phase final.
-
---- original v2 header ---
-Reverse-curriculum vectorized recurrent trainer — the one untried lever for rung 1.
-
-Every prior rung-1 attempt used the doorway assist at a FIXED, low mixture (8% sealed /
-12% placed / 20% near / 60% nothing), constant for the whole run. That is a static
-mixture, not a curriculum: 60% of episodes get zero help from step one, and the precise
-box-into-doorway push is never randomly sampled, so PPO gets ~zero gradient toward it.
-
-This trainer instead ANNEALS the assist. Early on ~90% of episodes spawn box 0 in or just
-above the doorway (the barricade's endpoint), and the hider only has to press lock / push a
-little. As training proceeds, BOTH the assist probability AND the push distance anneal to
-zero, so the hider must learn the push chain backward — from "just lock it" to "push it all
-the way from the default spawn and lock" — until it barricades with no help at all. That is
-the honest-eval condition, so if backward chaining works, rung 1 shows up unassisted.
-
-Warm-started from the 120M policies (strong evasion + rung 2 already in place), so the
-reverse curriculum only has to add the construction skill on top.
-
-Usage: python train_hs7_lstm_vec_rc.py [total] [rc_end] [_unused]
-                                       [--envs=N] [--steps=per_env] [--hidden=N] [--load=prefix]
-  total  = total steps per team (default 50M)
-  rc_end = step at which the door assist fully anneals to zero (default 30M)
-"""
+Some curriculum episodes place one hider near the doorway and the other near the ramp."""
 
 import copy
 import random
@@ -47,7 +15,7 @@ from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBu
 torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
 
 
-# ---- config ----
+# config
 SAVE_PREFIX = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--save=")), "hs_2v2")
 LAYOUT = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--layout=")), "roomt")
 SPEED = float(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--speed=")), 1.4))
@@ -66,14 +34,14 @@ P2 = 1.0                                       # both seekers active from step 1
 # box's default far spawn). roomt's doorway is at y~160 with box default spawn ~y105.
 _GEO = {"room": (222.0, 155.0), "roomt": (148.0, 105.0)}
 DOOR_Y, FAR_Y = _GEO[LAYOUT]
-HONEST_FRAC = 0.18                              # always-unassisted episodes (honest practice, keeps evasion/rung2 alive)
+HONEST_FRAC = 0.18                              # always-unassisted episodes (unassisted episodes throughout training)
 OFF_NEAR = 55.0                                 # Phase C hider offset above box at q=0 (lock-reach)
 OFF_FAR = 130.0                                 # Phase C hider offset at q=1 (> LOCK_DIST -> must push)
 
 
 def make_env():
     # 2 hiders vs 2 seekers: the paper's config, so one hider can barricade while the other
-    # locks the ramp away — the division of labor a single hider structurally cannot do.
+    # can interact with the ramp in the split-role curriculum.
     return HideAndSeekEnv(layout=LAYOUT, ramp=True, max_steps=360, lock_mode="level",
                           n_hiders=2, n_seekers=2, box_mass=2, door_box_size=72,
                           seeker_speed_mult=SPEED)
@@ -92,7 +60,7 @@ print(f"[arc] layout={LAYOUT} seeker_speed={SPEED}x DOOR_Y={DOOR_Y} FAR_Y={FAR_Y
 
 live = {t: RecurrentPPO(obs_dim, act_dim, hidden=HIDDEN) for t in TEAMS}
 # per-team warm-start so we can pair a barricade-hider with a ramp-seeker (each team from the
-# env that made ITS rung emerge) — the point of the unified-arc run.
+# env that made ITS rung emerge); the point of the unified-arc run.
 LOAD_T = {t: next((a.split("=", 1)[1] for a in sys.argv if a.startswith(f"--load-{t}=")), LOAD)
           for t in TEAMS}
 for t in TEAMS:
@@ -118,39 +86,28 @@ def reset_options(steps):
             "seeker_on_ramp": on_ramp,
             "ramp_locked": (not on_ramp) and r < 0.05,
             "hider_on_ramp": (not on_ramp) and 0.05 <= r < 0.10}
-    # 3-PHASE reverse curriculum on the barricade — decouple the two atoms the fixed-mixture
-    # runs never taught: (A) sealed-state VALUE + lock-press with the box prelocked; (B) the
-    # LOCK-PRESS itself, box handed to the hider in the doorway unlocked, its only job to lock
-    # it; (C) the PUSH, box distance grown door->far. Assist fades to zero by RC_END, so the
-    # end state is the honest no-assist condition. A constant HONEST_FRAC of episodes are
-    # unassisted throughout so evasion/rung 2 don't decay and honest play stays in-distribution.
+    # Start with a prelocked box, then require locking and progressively longer pushes.
+    # Keep some episodes unassisted and fade the curriculum by RC_END.
     p, _ = rc_phase(steps)
     if p >= 1.0 or random.random() < HONEST_FRAC:
         return opts
-    # SEEKER-side curriculum (the co-emergence lever): ~40% of curriculum episodes start with
-    # the door ALREADY hider-sealed, so rung 1 is done FOR the seeker and its only way to see
-    # the hider is to fetch/use the ramp and look over the wall — teaching rung 2 under the
-    # necessity that rung 1 creates. seeker_on_ramp sometimes starts it elevated (discovery).
-    # Fades with the same schedule; honest eval never sees it.
+    # Some episodes start with a sealed doorway or a seeker near the ramp.
     c = random.random()
-    if c < 0.25:                                  # SPLIT-ROLE curriculum (2v2): hider0 barricades,
-        # hider1 locks the ramp — teaches the DIVISION OF LABOR one hider structurally can't do.
-        # box0 handed just off the door (hider0 pushes+locks); ramp near the room (hider1 locks).
+    if c < 0.25:                                  # split-role spawn positions
+        # Place one hider near each object during this curriculum phase.
         opts["door_push_y"] = DOOR_Y
         opts["split_roles"] = True
         opts["seeker_on_ramp"] = False
         opts["ramp_locked"] = False
         return opts
-    if c < 0.45:                                  # SEEKER curriculum: sealed door -> must ramp over
+    if c < 0.45:                                  # sealed-door seeker curriculum
         opts["doorway_box"] = "sealed"
         opts["seeker_on_ramp"] = random.random() < 0.5
         opts["ramp_locked"] = False
         opts["hider_on_ramp"] = False
         return opts
-    if c < 0.62:                                  # RUNG-3 curriculum: hider learns to LOCK the ramp
-        # Door sealed (rung 1 done) so the ramp is the seeker's only recourse; the hider starts
-        # AT the ramp so it can reach and lock it, denying the seeker the ability to reposition
-        # it. Teaches ramp-denial (rung 3) under the necessity that rung 2 creates.
+    if c < 0.62:                                  # hider starts near the ramp
+        # Start with a sealed door and a hider near the ramp.
         opts["doorway_box"] = "sealed"
         opts["hider_on_ramp"] = True
         opts["seeker_on_ramp"] = False
@@ -177,7 +134,7 @@ def zero_hidden_slots(hc, rows):
         hc[1][:, row, :] = 0.0
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -283,7 +240,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + snapshot ----
+    # logging + save-best + snapshot
     lsteps = min(steps_done.values())
     _p, _ph = rc_phase(lsteps)
     parts = [f"Iter {iteration}", f"Steps {lsteps}",

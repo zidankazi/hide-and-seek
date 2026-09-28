@@ -5,21 +5,14 @@ from pettingzoo import ParallelEnv
 
 
 class HideAndSeekEnv(ParallelEnv):
-    """
-    Stage 5 hide-and-seek. Hiders get a prep-phase head start to push and lock movable boxes
-    into cover; the reward is line-of-sight (paper-faithful): seekers are rewarded when they
-    can SEE a hider, hiders when unseen, so hiders learn to barricade with boxes and lock them.
+    """Hide-and-seek with movable objects and visibility-based team rewards.
 
-    Supports 1v1 (Stage 5a/5b, agents "hider"/"seeker") and NvN teams (the scale-up run,
-    agents "hider_0".."seeker_N-1") via team_size — see __init__ for the team semantics.
-
-    PettingZoo Parallel API: all agents act each step; obs/rewards/etc. come back as dicts
-    keyed by agent name.
-    """
+    Implements the PettingZoo parallel API with a preparation phase, masked
+    observations, and configurable team sizes."""
 
     metadata = {"render_modes": ["human"], "name": "hide_and_seek_v0", "render_fps": 60}
 
-    # --- arena / agent constants (shared with TagEnv) ---
+    # arena / agent constants (shared with TagEnv)
     ARENA_SIZE = 600
     AGENT_RADIUS = 18
     FORCE_SCALE = 1500
@@ -28,42 +21,31 @@ class HideAndSeekEnv(ParallelEnv):
     TAG_DIST = 2 * AGENT_RADIUS + 2      # only used by the temporary 5a touch-tag reward
     MIN_SPAWN_DIST = 250                  # min hider/seeker separation at spawn (open layout)
 
-    # --- Stage 5 additions ---
+    # Stage 5 additions
     PREP_FRACTION = 0.4                  # first 40% of the episode: seeker frozen, no reward
     N_BOXES = 2
     BOX_SIZE = 44                        # full side length (matches renderer's box `size`)
     BOX_MASS = 3                         # pushable by an agent but heavy enough to stack a wall
     LOCK_DIST = AGENT_RADIUS + BOX_SIZE  # reach for locking the nearest box
 
-    # Collision/query filter categories. LOS raycasts use a mask of OCCLUDER_CAT so they only
-    # "see" walls and boxes and pass straight through agents (we don't want an agent's own body
-    # blocking its view). Physics collisions are unaffected (masks stay all-ones).
-    # Stage 7 splits occluders into two heights: WALL_CAT (arena edge, blocks sight always)
-    # and LOW_CAT (interior room walls + boxes — an ELEVATED agent standing on the ramp sees
-    # over these, within ELEV_RANGE). OCCLUDER_CAT stays the union, so every pre-ramp layout
-    # raycasts exactly as before.
+    # LOS queries ignore agents. Elevated queries can also ignore interior walls and boxes.
     AGENT_CAT = 0b0001
     WALL_CAT = 0b0010
     LOW_CAT = 0b0100
     OCCLUDER_CAT = WALL_CAT | LOW_CAT
     RAMP_CAT = 0b1000                    # the ramp itself never blocks sight
 
-    # --- Stage 7: the ramp (2D translation of the paper's climb-over-the-wall ramp) ---
-    # A pushable, lockable object. Any agent within RAMP_USE_DIST of its center is "elevated":
-    # its line-of-sight ignores LOW_CAT occluders (boxes, interior walls) out to ELEV_RANGE.
-    # Range is what makes ramp POSITION matter (as in the paper): a seeker must transport the
-    # ramp near the room to peek inside, and hiders can counter by locking it far away (locked
-    # objects can't be pushed; locks are per-team) or stealing it into the room.
+    # Agents near the ramp gain visibility through LOW_CAT obstacles within ELEV_RANGE.
     RAMP_SIZE = 40
     RAMP_MASS = 2                        # lighter than a box: quick to reposition
     RAMP_USE_DIST = 55                   # ~touching the ramp = standing on it
     ELEV_RANGE = 400                     # elevated sight only beats LOW occluders this far
                                          # (400 = whole room visible from the near band, so
                                          # in-room distance-evasion can't neutralize the ramp;
-                                         # denying the ramp becomes the hider's only counter)
+                                         # elevation is limited to this distance)
     RAMP_PARK = (540, 540)               # inactive ramp sits here, static and inert
 
-    # --- fixed map: a room in the top-left corner with one doorway ---
+    # fixed map: a room in the top-left corner with one doorway
     # Outer walls come from the arena edge; these interior segments close off the room,
     # leaving a 60px doorway in the bottom wall (x in [150, 210] at y=240).
     ROOM_WALLS = [
@@ -88,64 +70,36 @@ class HideAndSeekEnv(ParallelEnv):
                  n_hiders=None, n_seekers=None, box_mass=None, door_box_size=None,
                  seeker_speed_mult=1.0, ramp_climb=False, ramp_xray=True, climb_steps=45,
                  climb_teams=("seeker",), ramp_bands=None):
-        """
-        layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
-            hider passively, so tool-use is optional.
-        layout="open" (Stage 5b-ii): open arena, no interior walls, 4 boxes, hider spawns in a
-            random corner. Nothing hides the hider for free — it must push+lock boxes to close
-            a corner pocket, forcing genuine fort-building (closest to the paper).
+        """Create a room, tight-room, or open-arena environment.
 
-        team_size=1 keeps the original 1v1 game unchanged (agents "hider"/"seeker").
-        team_size>=2 (the scale-up run) fields teams ("hider_0".."seeker_N-1"): obs gain
-        teammate blocks, box locks are owned per-TEAM (either teammate can unlock), and the
-        LOS reward is team-level — seekers score when ANY seeker sees ANY hider, hiders score
-        only when ALL of them are unseen (paper-faithful team reward).
-        n_boxes overrides the layout default (room 2 / open 4).
+        n_hiders and n_seekers override the symmetric team_size. n_boxes overrides
+        the layout's default. A ramp adds seven observation fields and may be
+        disabled per episode without changing observation size.
 
-        ramp=True (Stage 7) adds the ramp object: +7 obs dims (ramp block + own elevated
-        flag), elevation-aware LOS, and the reset(options={"ramp_active": bool}) curriculum
-        knob — inactive episodes park the ramp at RAMP_PARK, static, with elevation disabled,
-        so a run can anneal the mechanic in without changing the obs layout.
-        max_steps overrides MAX_STEPS (Stage 7 uses 360: prep must fit ramp defense AND
-        barricading). Reward scale adapts (per-step r = 1/PLAY_STEPS).
-
-        lock_mode="toggle" (default, Stages 5-6): rising edge of action[2]>0.5 toggles
-        the nearest lockable — but under exploration noise an agent dwelling near its own
-        locked box keeps re-crossing the threshold and randomly UNDOES its own lock, so
-        "build and hold" can't be reinforced. lock_mode="level" (Stage 7 runs 10+):
-        action[2]>0.5 locks (level-triggered, idempotent — holding it keeps the lock);
-        unlocking one's own lock is a separate EDGE-triggered press below -0.5.
-        """
+        In toggle mode, a rising lock signal toggles the nearest object's lock.
+        In level mode, a positive signal locks it; an edge below -0.5 unlocks it.
+        ramp_climb controls the experimental collision change independently of
+        ramp_xray, which controls elevated visibility."""
         assert layout in ("room", "open", "roomt")
         assert lock_mode in ("toggle", "level")
         assert team_size >= 1
         self.layout = layout
         self.lock_mode = lock_mode
         self.team_size = team_size
-        # Asymmetric teams (the paper's actual pressure: several seekers pincer, so
-        # evasion stops paying and construction becomes the hider's only refuge).
-        # Defaults preserve the symmetric team_size behavior exactly.
+        # Explicit team counts override the symmetric team_size setting.
         self.n_hiders = n_hiders if n_hiders is not None else team_size
         self.n_seekers = n_seekers if n_seekers is not None else team_size
         assert self.n_hiders >= 1 and self.n_seekers >= 1
         self.ramp = ramp
-        # Seekers can be made faster/stronger so a same-speed hider can no longer simply
-        # outrun them — the lever that makes plain evasion fail and forces the barricade.
-        # 1.0 = original behavior (byte-identical).
+        # Scale seeker force and maximum speed together.
         self.seeker_speed_mult = float(seeker_speed_mult)
         if max_steps is not None:
             self.MAX_STEPS = int(max_steps)
         if box_mass is not None:
-            # Stage 7 uses 2: a lighter box shortens the contact-push needed to place it,
-            # which is what makes precise barricade construction learnable under noise.
+            # The later room experiments use a box mass of 2.
             self.BOX_MASS = float(box_mass)
         self.N_BOXES = n_boxes if n_boxes is not None else (4 if layout == "open" else 2)
-        # --- room geometry (parameterized so a tight room can force evasion to fail) ---
-        # "roomt" is a small corner room: once a seeker reaches the doorway it sees the whole
-        # interior, so an OPEN door means exposure and the ONLY refuge is to SEAL it — the same
-        # necessity that made rung 2 emerge, now applied to rung 1. Same obs/team/box shape as
-        # "room" (1 door-box + 1 spare, ramp) so policies warm-start across. "room" values are
-        # the exact originals (byte-identical trajectories preserved).
+        # The two room layouts share observation dimensions but use different geometry.
         if self.layout == "roomt":
             self.ROOM_LO, self.ROOM_HI = 40, 138          # hider/box interior spawn square
             self._door_cx, self._door_y, self._door_hw = 115, 160, 30   # doorway x[85,145] @ y160
@@ -164,9 +118,7 @@ class HideAndSeekEnv(ParallelEnv):
             self._room_walls = [list(w) for w in self.ROOM_WALLS]
             self._box0_spawn = ((150, 205), (140, 190))
             self._ramp_bands = ((240, 330), (240, 480))   # original bands (byte-identical)
-        # Both defaults sit inside ELEV_RANGE of the room, so the ramp is already useful where
-        # it spawns and transporting it buys nothing (measured: ~1px moved per episode). Pass
-        # ramp_bands to spawn it out of range and make fetching it necessary.
+        # Override the default ramp spawn bands for placement experiments.
         if ramp_bands is not None:
             self._ramp_bands = tuple(tuple(b) for b in ramp_bands)
         if self.n_hiders == 1 and self.n_seekers == 1:
@@ -181,7 +133,7 @@ class HideAndSeekEnv(ParallelEnv):
         self.teams = {t: [n for n in self.possible_agents if self.team[n] == t]
                       for t in ("hider", "seeker")}
         # Curriculum knob (set per-episode via reset(options={"active_seekers": k})):
-        # seekers beyond the first k are DORMANT — frozen in place for the whole episode
+        # seekers beyond the first k are DORMANT; frozen in place for the whole episode
         # and excluded from the team line-of-sight check. Obs layout is unaffected, so
         # policies transfer across curriculum phases. Default: everyone active.
         self.active_seekers = self.n_seekers
@@ -193,7 +145,7 @@ class HideAndSeekEnv(ParallelEnv):
         self.space.gravity = (0, 0)
         self.space.damping = 0.5
 
-        # --- agents ---
+        # agents
         mass = 1
         moment = pymunk.moment_for_circle(mass, 0, self.AGENT_RADIUS)
         self.bodies = {}
@@ -208,7 +160,7 @@ class HideAndSeekEnv(ParallelEnv):
             self.shapes[name] = shape
             self.space.add(body, shape)
 
-        # --- walls: arena edge (+ interior room walls only in the "room" layout) ---
+        # walls: arena edge (+ interior room walls only in the "room" layout)
         edge = self.ARENA_SIZE - 10
         self.walls = [
             [(10, 10), (edge, 10)],
@@ -227,14 +179,14 @@ class HideAndSeekEnv(ParallelEnv):
                 categories=self.WALL_CAT if k < n_edge else self.LOW_CAT)
             self.space.add(seg)
 
-        # --- movable boxes ---
+        # movable boxes
         # Created once and repositioned each reset (same pattern as the agents).
         # lock_owner tracks which team has locked a box: None / "hider" / "seeker" (used in 5b).
         self.box_bodies = []
         self.box_shapes = []
         self.box_lock_owner = [None] * self.N_BOXES
         # Per-box sizes: box 0 can be enlarged (door_box_size, ramp+room only) so it seals
-        # the 60px doorway from a much wider placement range — this lowers the PRECISION the
+        # the 60px doorway from a much wider placement range; this lowers the PRECISION the
         # rung-1 barricade needs (a rough shove seals it), attacking the diagnosed bottleneck
         # without touching the reward. Every other box, and all non-ramp layouts, unchanged.
         self._door_box_size = (door_box_size if (door_box_size and ramp and layout == "room")
@@ -254,22 +206,14 @@ class HideAndSeekEnv(ParallelEnv):
             self.space.add(body, shape)
         self._box_moment = pymunk.moment_for_box(self.BOX_MASS, (self.BOX_SIZE, self.BOX_SIZE))
 
-        # --- the ramp (Stage 7) ---
+        # the ramp (Stage 7)
         self.ramp_body = None
         self.ramp_shape = None
         self.ramp_lock_owner = None
         self.ramp_active = True     # curriculum knob; set per-episode via reset options
         self._elevated_now = set()  # agents currently within RAMP_USE_DIST of the ramp
 
-        # --- what being elevated actually buys you (two independent effects) ---
-        # ramp_xray  (default True, the original Stage 7 behavior): elevation rewrites the LOS
-        #   mask, so the agent SEES over LOW_CAT occluders within ELEV_RANGE.
-        # ramp_climb (default False): elevation also drops LOW_CAT from the agent's COLLISION
-        #   mask, so it can CROSS interior walls and boxes — the paper's climb-over.
-        # Sight alone is what shipped, and it is why the doorway stays the only way in and the
-        # ramp never needs moving (it spawns inside ELEV_RANGE; measured ~1px moved/episode).
-        # Splitting them lets a run make the ramp an entry tool rather than a surveillance one:
-        # ramp_xray=False, ramp_climb=True means the ramp buys nothing until you climb it.
+        # Control elevated visibility and optional wall traversal independently.
         self.ramp_xray = bool(ramp_xray)
         self.ramp_climb = bool(ramp_climb)
         self.climb_steps = int(climb_steps)      # elevation persists this long after leaving
@@ -327,20 +271,11 @@ class HideAndSeekEnv(ParallelEnv):
         return spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
     def _visible(self, agent, target_body, target_shape=None):
-        """
-        Line-of-sight from `agent` to a target body: cast a ray between the two centers and
-        report whether a wall or box occludes it. The ray uses OCCLUDER_CAT as its mask so it
-        ignores both agents' bodies entirely (only walls/boxes can block).
+        """Test line-of-sight between an agent and a target body.
 
-        `target_shape` is the target's own shape when the target is itself an occluder (a box):
-        the ray ends at the box center and would otherwise register a hit on the box itself, so
-        a hit *on the target* counts as visible. For the opponent (not an occluder) pass None.
-
-        An ELEVATED observer (standing on the ramp) sees over LOW_CAT occluders — boxes and
-        interior walls — but only within ELEV_RANGE; beyond that, normal rules. Arena-edge
-        walls block sight regardless. Elevation only grants this when ramp_xray is on (the
-        default); with it off the ramp is purely an entry tool and buys no extra sight.
-        """
+        Rays ignore agent bodies. For a box target, a hit on target_shape counts
+        as visible. With ramp_xray enabled, elevated agents can see through
+        interior walls and boxes within ELEV_RANGE."""
         start = self.bodies[agent].position
         end = target_body.position
         mask = self.OCCLUDER_CAT
@@ -375,17 +310,11 @@ class HideAndSeekEnv(ParallelEnv):
         return len(hits) > 0
 
     def _update_elevation(self):
-        """Refresh `_elevated_now`, and (if ramp_climb) who may pass through LOW_CAT.
+        """Update elevated agents and optional wall-traversal collision masks.
 
-        With ramp_climb off this is exactly `_compute_elevated()` and nothing else happens,
-        so every pre-climb run reproduces byte-for-byte.
-
-        With it on, stepping onto the ramp opens a `climb_steps` window that keeps ticking
-        after the agent leaves it, giving a crossing time to finish — otherwise the agent
-        re-solidifies the instant it steps off the ramp and can never get through. The window
-        also can't expire while the agent is still inside a wall (it would be wedged in
-        geometry or violently ejected), so it stays phased until it is clear.
-        """
+        With climbing enabled, elevation persists for climb_steps after leaving
+        the ramp. Keep the mask active while an agent overlaps a wall or box to
+        avoid restoring collisions inside an obstacle."""
         on_ramp = self._compute_elevated()
         if not self.ramp_climb:
             self._elevated_now = on_ramp
@@ -537,7 +466,7 @@ class HideAndSeekEnv(ParallelEnv):
         ]
 
         # Every other agent (teammates first, then opponents), each masked by line-of-sight:
-        # when not visible, zero pos/vel + flag 0. Teammates are masked too — agents share a
+        # when not visible, zero pos/vel + flag 0. Teammates are masked too; agents share a
         # policy, not a radio.
         others = [n for n in self.teams[my_team] if n != agent] + self.teams[opp_team]
         for other in others:
@@ -606,22 +535,22 @@ class HideAndSeekEnv(ParallelEnv):
         # Ramp curriculum knob (persists across resets until changed, like active_seekers).
         if self.ramp and options and "ramp_active" in options:
             self.ramp_active = bool(options["ramp_active"])
-        # Discovery assists (per-episode, do NOT persist — evals never see them unless
+        # Discovery assists (per-episode, do NOT persist; evals never see them unless
         # asked). Training-only spawn-state tweaks; the reward is never touched.
-        #   seeker_on_ramp: seekers start standing on the ramp — elevated vision is
+        #   seeker_on_ramp: seekers start standing on the ramp; elevated vision is
         #     experienced without first discovering transport+standing (ignited rung 2).
-        #   ramp_locked:    the ramp starts already hider-locked where it spawned — the
+        #   ramp_locked:    the ramp starts already hider-locked where it spawned; the
         #     hider experiences "ramp denied -> seeker grounded" payoff directly (rung 3).
-        #   doorway_sealed: box 0 starts hider-locked in the doorway — the hider
+        #   doorway_sealed: box 0 starts hider-locked in the doorway; the hider
         #     experiences the barricade payoff directly (rung 1).
-        #   hider_on_ramp:  hiders start beside the ramp during prep — locking it is one
+        #   hider_on_ramp:  hiders start beside the ramp during prep; locking it is one
         #     press away, transporting it a short push (reverse-chained rung 3).
         #   doorway_box:    "sealed" = box 0 hider-locked in the doorway (full payoff
-        #     state); "placed" = box 0 sitting in the doorway UNLOCKED — the barricade
+        #     state); "placed" = box 0 sitting in the doorway UNLOCKED; the barricade
         #     needs only the lock press; "near" = box 0 a short push (25-50px) above the
-        #     doorway — push + press (graded reverse chain for rung 1).
+        #     doorway; push + press (graded reverse chain for rung 1).
         #   hider_at_door:  (with doorway_box="placed") hiders start beside the unlocked
-        #     doorway box — the barricade lock-press is immediately reachable. The evade
+        #     doorway box; the barricade lock-press is immediately reachable. The evade
         #     prior keeps hiders AWAY from the doorway, so without this the placed state
         #     is never dwelled in and the press never fires (phase A lesson).
         seeker_on_ramp = bool(options.get("seeker_on_ramp")) if options else False
@@ -638,13 +567,13 @@ class HideAndSeekEnv(ParallelEnv):
         # split_roles (2+ hiders): put hider 0 at the door box and hider 1 at the ramp, so the
         # division of labor rung 3 needs (one barricades, one locks the ramp) is scaffolded.
         split_roles = bool(options.get("split_roles")) if options else False
-        # "near" / "far" pins the ramp's spawn band instead of the 50/50 coin flip — used by
+        # "near" / "far" pins the ramp's spawn band instead of the 50/50 coin flip; used by
         # the climb curriculum to put the ramp within reach of a wall during discovery.
         ramp_band = options.get("ramp_band") if options else None
         # How far above the box to place hiders when hider_at_door: default 55 keeps them
         # within LOCK_DIST (they can lock in place). A larger offset (> LOCK_DIST) puts the
         # box BETWEEN the hider and the doorway, so the hider must descend through it to
-        # reach the seal — turning approach-locomotion into the push (rung-1 push curriculum).
+        # reach the seal; turning approach-locomotion into the push (rung-1 push curriculum).
         hider_door_offset = float(options.get("hider_door_offset", 55.0)) if options else 55.0
         if options and options.get("doorway_sealed"):  # back-compat alias
             doorway_box = "sealed"
@@ -724,7 +653,7 @@ class HideAndSeekEnv(ParallelEnv):
 
         for i, body in enumerate(self.box_bodies):
             # Ramp-era room spawns: box 0 starts ABOVE the doorway (same x band, ~80px
-            # push to seal it) — near enough to make rung 1 short, but clear of the
+            # push to seal it); near enough to make rung 1 short, but clear of the
             # doorway's sightlines and entry path. (Run 2 spawned it at y 170-210,
             # directly behind the doorway: a passive plug that killed all hunting
             # pressure and with it every gradient in the ladder.)
@@ -745,7 +674,7 @@ class HideAndSeekEnv(ParallelEnv):
         if self.ramp:
             if self.ramp_active:
                 # Ramp spawns outside the room: half the time in a NEAR band (within
-                # elevation range of the room interior — standing on it where it lies
+                # elevation range of the room interior; standing on it where it lies
                 # already pays, the discovery gradient), otherwise anywhere mid-arena
                 # (transport required). The first 30M run showed a uniform [250,480]
                 # band leaves stand-on-ramp reward too rare to ever be discovered.
@@ -887,7 +816,7 @@ class HideAndSeekEnv(ParallelEnv):
 
         self._update_elevation()
 
-        # --- line-of-sight reward (paper-faithful), play phase only ---
+        # line-of-sight reward (visibility-based), play phase only
         # Team-level: seekers get +r when ANY seeker sees ANY hider, hiders get +r only when
         # ALL hiders are unseen. Per-step magnitude is 1/PLAY_STEPS so a full episode totals
         # at most ±1. No reward in prep, no tag/termination on contact: the game is pure
@@ -911,7 +840,7 @@ class HideAndSeekEnv(ParallelEnv):
         # Expose visibility so eval/rendering can track the hidden-fraction metric.
         infos = {a: {"seeker_sees_hider": seeker_sees, "in_prep": in_prep} for a in self.agents}
         # Stage 7 rung metrics: is the doorway sealed by a hider-locked box, is any seeker
-        # elevated, and who holds the ramp lock — the emergence-timeline signals.
+        # elevated, and who holds the ramp lock; the emergence-timeline signals.
         if self.ramp:
             _sx0, _sx1, _sy0, _sy1 = self._seal_zone
             barricaded = any(

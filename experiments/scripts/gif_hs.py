@@ -1,26 +1,12 @@
-"""
-Render a trained policy to an animated GIF — headless, for the writeup's stage montage.
+"""Search several episodes and render the highest-scoring one as a GIF.
 
-Auto-detects the checkpoint architecture (feed-forward ppo_continuous vs recurrent
-ppo_recurrent) so it works across every stage's policies. Runs several episodes, scores
-each by the behavior you want to showcase (--want), and writes the best-matching episode
-as a GIF. No display needed (offscreen SDL).
+Loads feed-forward or recurrent weights. --want=elev scores elevation-dependent
+sightlines; --want=barricade and --want=rlock score end-of-episode flags.
+For a single known seed, use the root demo.py.
 
-Note: --want=elev scores *genuine* ramp use (steps where standing on the ramp is what
-reveals the hider), not the env's `seeker_elevated` flag, which only means "within
-RAMP_USE_DIST of the ramp" and fires even when the elevation reveals nothing.
-
-Usage:
-  python gif_hs.py <prefix> [--final|--best] [--layout=room|roomt] [--nh=1] [--ns=2]
-                   [--speed=1.0] [--want=barricade|rlock|elev|hidden|any]
-                   [--episodes=30] [--out=stage.gif] [--stride=2] [--scale=0.6] [--fps=30]
-
-Examples (the montage):
-  python gif_hs.py hs_mega1v1 --layout=room --nh=1 --ns=1 --want=hidden --out=1_evasion.gif
-  python gif_hs.py hs_lstm    --layout=room  --nh=1 --ns=2 --want=elev      --out=2_ramp.gif
-  python gif_hs.py hs_roomt   --layout=roomt --nh=1 --ns=2 --want=barricade --out=3_barricade.gif
-  python gif_hs.py hs_2v2     --layout=roomt --nh=2 --ns=2 --speed=1.4 --want=rlock --out=4_arc.gif
-"""
+Usage: python gif_hs.py <prefix> [--best|--final] [--layout=room|roomt]
+       [--nh=1] [--ns=2] [--speed=1.0] [--want=barricade|rlock|elev|hidden|any]
+       [--episodes=30] [--out=demo.gif]"""
 import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -62,7 +48,7 @@ obs_dim = env.observation_space(env.possible_agents[0]).shape[0]
 act_dim = env.action_space(env.possible_agents[0]).shape[0]
 H0 = env.teams["hider"][0]
 
-# ---- load policies, auto-detecting architecture from the checkpoint keys ----
+# load policies, auto-detecting architecture from the checkpoint keys
 def ckpt(team):
     p = f"{PREFIX}_{team}{SUFFIX}.pt"
     if SUFFIX and not os.path.exists(p):
@@ -122,13 +108,7 @@ def grab():
 
 
 def decisive_seekers():
-    """Seekers using the ramp *right now* to see over a wall.
-
-    env's `seeker_elevated` only says a seeker is within RAMP_USE_DIST of the ramp, which
-    is true whenever it stands near it — including when elevation reveals nothing. Here we
-    require that the elevation is what grants the sightline: the seeker sees the hider now
-    and would NOT see it un-elevated. That is the behavior rung 2 actually claims.
-    """
+    """Return seekers whose view of the first hider depends on elevation."""
     hb = env.bodies[H0]
     saved = env._elevated_now
     out = []
@@ -146,11 +126,7 @@ def decisive_seekers():
 
 
 def draw_sightline(seekers):
-    """Draw the over-the-wall sightline the elevation bought, so the GIF shows the mechanic.
-
-    Without this the frame is just a seeker standing on a green wedge — the viewer can't
-    tell it is seeing through the interior wall. Overlay only; env/renderer untouched.
-    """
+    """Draw elevation-dependent sightlines without changing the simulation."""
     if not SIGHTLINE or not seekers:
         return
     R = env.renderer
@@ -212,7 +188,7 @@ for ep in range(EPISODES):
     print(f"  ep {ep}: score={s:.2f} (best={best['score']:.2f})"
           f"  [ramp used {info['_elev_frac']:.0%}, near-ramp {info['_prox_frac']:.0%}]")
 
-# ---- assemble the winning episode into a GIF (zoom already applied in grab) ----
+# assemble the winning episode into a GIF (zoom already applied in grab)
 from PIL import ImageDraw, ImageFont
 BAR_H = 30 if LABEL else 0
 _font = None

@@ -1,12 +1,4 @@
-"""
-Multi-agent PPO training loop for the tag env. Two completely independent PPO
-instances (hider and seeker), each with its own network, buffer, and optimizer.
-
-From each agent's perspective the other agent is just part of the environment, so
-the PPO class from ppo_continuous.py works as-is. The only new code is the
-orchestration: query both networks each step, store into both buffers, update both
-networks after each rollout, and save each one to its own file.
-"""
+"""Train separate hider and seeker PPO policies in the tag environment."""
 
 import numpy as np
 import torch

@@ -1,15 +1,9 @@
-"""
-Behavioral eval for Stage 7 (room 1v2 + ramp). Loads hs_ramp_hider.pt / hs_ramp_seeker.pt
-(one shared policy per team) and measures each rung of the emergent arc over N
-deterministic episodes with NO training assists:
-  rung 1  barricade: doorway sealed by a hider-locked box at episode end
-  rung 2  ramp use: fraction of play steps any seeker spends elevated
-  rung 3  ramp defense: ramp locked by the hider at episode end (+ where it ended up)
-plus hidden-fraction, a single-seeker comparison (is the second seeker what forces the
-tools?), and the hider-disabled counterfactual (geometry-alone baseline).
+"""Legacy LSTM evaluator using the ramp-proximity metric.
 
-Usage: python eval_hs7.py [N] [--final]
-"""
+Usage: python eval_hs7_lstm.py [prefix] [episodes] [--final]
+       [--layout=room|roomt] [--speed=1.0] [--nh=1] [--ns=2]
+
+The root evaluate.py also checks whether elevation changes visibility."""
 import sys
 import numpy as np
 import torch

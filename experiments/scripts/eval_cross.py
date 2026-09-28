@@ -1,7 +1,6 @@
-"""
-Cross-matchup eval: load hider from one dir and seeker from another so we can isolate
-each policy's contribution. Usage: python eval_cross.py <hider_dir> <seeker_dir> [N]
-"""
+"""Evaluate a tag hider and seeker loaded from different directories.
+
+Usage: python eval_cross.py <hider_dir> <seeker_dir> [episodes]"""
 import sys
 import numpy as np
 import torch

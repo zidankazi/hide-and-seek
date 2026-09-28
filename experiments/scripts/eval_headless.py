@@ -1,8 +1,6 @@
-"""
-Headless evaluation: run trained hider vs seeker for N episodes (deterministic actions),
-report catch rate and mean steps-to-catch. Pass a directory to load {hider,seeker}.pt from
-a different location (e.g. stage3_backup) for A/B comparison.
-"""
+"""Measure catch rate and time to catch for saved tag policies.
+
+Usage: python eval_headless.py [checkpoint_directory] [episodes]"""
 import sys
 import numpy as np
 import torch

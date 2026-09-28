@@ -1,7 +1,4 @@
-"""
-Watch random policies play tag. Useful for eyeballing that the env looks right
-before we start training. Quit by closing the window.
-"""
+"""View random policies in the tag environment."""
 
 from hide_and_seek.env import TagEnv
 

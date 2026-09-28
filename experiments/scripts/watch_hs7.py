@@ -1,10 +1,6 @@
-"""
-Watch the trained Stage 7 policies (room 1v1 + ramp) play deterministically.
-Renders the full game: prep phase, boxes, the ramp (green wedge), locks.
+"""View saved feed-forward room-and-ramp policies using their mean actions.
 
-Usage: python watch_hs7.py [--final] [--best]   (default --final)
-Close the window to quit.
-"""
+Usage: python watch_hs7.py [--best|--final]"""
 import sys
 import numpy as np
 import torch

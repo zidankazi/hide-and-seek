@@ -1,44 +1,7 @@
-"""
-Climb variant — the ramp as an ENTRY tool instead of a surveillance one.
+"""Experimental trainer with ramp-enabled wall traversal.
 
-Every prior Stage 7 run gave elevation one effect: it rewrote the LOS mask, so a seeker
-standing on the ramp SAW over interior walls. It could never cross one. Two consequences,
-both measured on 2026-07-28 and written up in NOTES:
-
-  1. the ramp is never transported (1-5px moved per episode) — it spawns inside ELEV_RANGE,
-     so standing where it lies already pays and fetching it buys nothing;
-  2. "rung 2" was scored by proximity to the ramp, which is a ~74-85% proxy for genuinely
-     seeing over a wall, and not a claim about climbing at all.
-
-This run turns the mechanic into the paper's: ramp_climb=True drops LOW_CAT from a seeker's
-COLLISION mask while elevated, so it can cross interior walls and boxes; ramp_xray=False
-removes the see-through effect entirely. The ramp now buys NOTHING until a seeker climbs it,
-which is the sharpest possible test of the project's thesis — a tool emerges iff the
-environment makes it necessary.
-
-The necessity chain this sets up:
-  rung 1 (hider seals the doorway)  ->  the doorway is the only walk-in route, so sealing it
-                                        leaves the seekers with no way in at all
-  rung 2 (seeker climbs the ramp)   ->  the ONLY remaining route, and worth real reward
-  rung 3 (hider locks the ramp away) -> now denies ENTRY, not just sight, so it is finally
-                                        load-bearing (it was ~1.5-2% when it only cost sight)
-
-CLIMB_STEPS is the lever that decides how much ramp POSITION matters: it is how long
-elevation persists after leaving the ramp, so seeker_speed * CLIMB_STEPS/60 is roughly how
-far a seeker can carry a climb. Short window => the ramp must be near the wall => hiders
-have a real reason to lock it far away (rung 3). 25 steps at 1.4x speed is ~175px.
-
-Warm-starts from the 2v2 arc lineage (hs_2v2), which already has rung 1 at ~23% and a weak
-rung 3, so this run only has to add the climb on top.
-
-Usage: python train_hs7_climb.py [total] [rc_end]
-           [--envs=N] [--steps=per_env] [--hidden=N] [--save=prefix]
-           [--load=prefix | --load-hider=p --load-seeker=p]
-           [--layout=roomt|room] [--speed=1.4] [--climb-steps=25] [--xray]
-  total  = total steps per team (default 50M)
-  rc_end = step at which the climb curriculum anneals to zero (default 30M)
-  --xray = also keep the old see-through effect on (default off for this run)
-"""
+Disables the elevated visibility shortcut and changes collision masks during the
+climbing window. This experiment has no verified result in the final evaluation."""
 
 import copy
 import random
@@ -58,7 +21,7 @@ def _arg(name, default, cast=str):
     return cast(hit) if hit is not None else default
 
 
-# ---- config ----
+# config
 SAVE_PREFIX = _arg("save", "hs_climb")
 LAYOUT = _arg("layout", "roomt")
 SPEED = _arg("speed", 1.4, float)
@@ -76,13 +39,13 @@ TEAMS = ("hider", "seeker")
 
 _GEO = {"room": (222.0, 155.0), "roomt": (148.0, 105.0)}
 DOOR_Y, FAR_Y = _GEO[LAYOUT]
-HONEST_FRAC = 0.18          # always-unassisted episodes, so honest play stays in-distribution
+HONEST_FRAC = 0.18          # always-unassisted episodes, so unassisted play stays in-distribution
 OFF_NEAR, OFF_FAR = 55.0, 130.0
 
 
 def make_env():
     # 2v2 as in the arc run: two hiders let one barricade while the other denies the ramp,
-    # the division of labor rung 3 needs. climb_teams stays seeker-only — a hider that could
+    # the division of labor rung 3 needs. climb_teams stays seeker-only; a hider that could
     # climb out of its own sealed room would make rung 1 pointless.
     return HideAndSeekEnv(layout=LAYOUT, ramp=True, max_steps=360, lock_mode="level",
                           n_hiders=2, n_seekers=2, box_mass=2, door_box_size=72,
@@ -121,23 +84,19 @@ def rc_phase(steps):
 
 
 def reset_options(steps):
-    """Climb curriculum: back-chain the crossing, then fade every assist to zero.
+    """Choose spawn assists for the current climbing curriculum phase.
 
-    A seeker only discovers the climb if it is elevated AND near a wall at the same time, and
-    neither happens by chance — the ramp spawns mid-arena and the window is 25 steps. So phase
-    A hands it both (sealed door, ramp in the near band, seeker starting on the ramp) and the
-    only thing left to learn is "move toward the room". B removes the free elevation so it has
-    to reach the ramp first; C removes the ramp placement too.
-    """
+    Start seekers on a ramp near the wall, then remove the seeker placement
+    and finally the ramp placement. Keep some episodes unassisted throughout."""
     opts = {"active_seekers": 2, "ramp_active": True}
     p, _ = rc_phase(steps)
     if p >= 1.0 or random.random() < HONEST_FRAC:
         return opts
 
     c = random.random()
-    # --- rung 2: the climb itself (the point of this run) ---
+    # rung 2: the climb itself (the point of this run)
     if c < 0.45:
-        opts["doorway_box"] = "sealed"      # no walk-in route, so climbing is the only way
+        opts["doorway_box"] = "sealed"      # start with a sealed doorway
         opts["ramp_band"] = "near"          # ramp within a climb window of the wall
         if p < 0.35:
             opts["seeker_on_ramp"] = True                       # A: start elevated
@@ -147,13 +106,13 @@ def reset_options(steps):
             opts["seeker_on_ramp"] = False                      # C: unaided
             opts.pop("ramp_band")
         return opts
-    # --- rung 3: denying the ramp, which now denies ENTRY rather than sight ---
+    # rung 3: denying the ramp, which now denies ENTRY rather than sight
     if c < 0.62:
         opts["doorway_box"] = "sealed"
         opts["hider_on_ramp"] = True        # hider starts at the ramp so it can lock it
         opts["ramp_band"] = "near"
         return opts
-    # --- rung 1: keep the barricade alive; without it nothing above is necessary ---
+    # rung 1: keep the barricade alive; without it nothing above is necessary
     if c < 0.80:
         opts["door_push_y"] = DOOR_Y
         opts["split_roles"] = True
@@ -171,7 +130,7 @@ def zero_hidden_slots(hc, rows):
         hc[1][:, row, :] = 0.0
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -276,7 +235,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + snapshot ----
+    # logging + save-best + snapshot
     lsteps = min(steps_done.values())
     _p, _ph = rc_phase(lsteps)
     parts = [f"Iter {iteration}", f"Steps {lsteps}",

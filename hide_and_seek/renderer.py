@@ -108,7 +108,7 @@ class GameRenderer:
         self._floor_cache = None
         self._vignette_cache = None
 
-    # --- coordinate helpers ---
+    # coordinate helpers
 
     def _to_screen(self, pos, world_size=600):
         scale = self.arena_size / world_size
@@ -117,7 +117,7 @@ class GameRenderer:
     def _scale(self, val, world_size=600):
         return val * (self.arena_size / world_size)
 
-    # --- floor ---
+    # floor
 
     def _build_floor(self):
         surf = pygame.Surface((self.arena_size, self.arena_size))
@@ -141,7 +141,7 @@ class GameRenderer:
             self._build_floor()
         surface.blit(self._floor_cache, (self.arena_x, self.arena_y))
 
-    # --- vignette ---
+    # vignette
 
     def _build_vignette(self):
         surf = pygame.Surface((self.arena_size, self.arena_size), pygame.SRCALPHA)
@@ -160,14 +160,14 @@ class GameRenderer:
             self._build_vignette()
         surface.blit(self._vignette_cache, (self.arena_x, self.arena_y))
 
-    # --- shadows ---
+    # shadows
 
     def _draw_shadow_ellipse(self, surface, center, rx, ry, alpha=22):
         s = pygame.Surface((int(rx * 2 + 4), int(ry * 2 + 4)), pygame.SRCALPHA)
         pygame.draw.ellipse(s, (0, 0, 0, alpha), (2, 2, int(rx * 2), int(ry * 2)))
         surface.blit(s, (int(center[0] - rx - 2), int(center[1] - ry + 2)))
 
-    # --- walls ---
+    # walls
 
     def _draw_walls(self, surface, walls):
         wall_w = self._scale(7)
@@ -215,7 +215,7 @@ class GameRenderer:
             pygame.draw.polygon(surface, COLORS["wall_top"], top)
             pygame.draw.polygon(surface, COLORS["wall_outline"], top, 1)
 
-    # --- goal ---
+    # goal
 
     def _draw_goal(self, surface, pos, radius=12):
         if pos is None:
@@ -236,7 +236,7 @@ class GameRenderer:
         pygame.draw.circle(surface, COLORS["goal"], (int(sp[0]), int(sp[1])), int(sr * pulse), 3)
         pygame.draw.circle(surface, COLORS["goal"], (int(sp[0]), int(sp[1])), max(2, int(sr * 0.35)), 0)
 
-    # --- boxes ---
+    # boxes
 
     def _draw_box(self, surface, pos, size=30, locked=False):
         sp = self._to_screen(pos)
@@ -296,7 +296,7 @@ class GameRenderer:
         dot_r = max(1, ls // 3)
         pygame.draw.circle(surface, COLORS["lock_outline"], (lx, ly + int(ls * 0.3)), dot_r)
 
-    # --- ramp (Stage 7): a wedge, drawn box-like so it sits in the same visual language ---
+    # ramp (Stage 7): a wedge, drawn box-like so it sits in the same visual language
 
     def _draw_ramp(self, surface, pos, size=40, locked=False):
         sp = self._to_screen(pos)
@@ -338,7 +338,7 @@ class GameRenderer:
             self._draw_lock_glyph(surface, int(sp[0] + half * 0.35), int(sp[1] + half * 0.3),
                                   max(4, int(ss * 0.18)))
 
-    # --- agents ---
+    # agents
 
     def _draw_agent(self, surface, pos, radius=18, role="hider", facing=(0, 0), agent_id=0):
         sp = self._to_screen(pos)
@@ -425,7 +425,7 @@ class GameRenderer:
                     radius=random.randint(2, 4),
                 ))
 
-    # --- particles ---
+    # particles
 
     def _update_and_draw_particles(self, surface):
         for p in self.particles:
@@ -438,7 +438,7 @@ class GameRenderer:
             pygame.draw.circle(ps, (*p.color, p.alpha), (r * 2, r * 2), r)
             surface.blit(ps, (int(p.x - r * 2), int(p.y - r * 2)))
 
-    # --- hud ---
+    # hud
 
     def _draw_hud(self, info):
         hy = self.height
@@ -495,7 +495,7 @@ class GameRenderer:
         pygame.draw.line(self.screen, (*COLORS["prep_color"], 150),
                          (int(prep_x), bar_y - 3), (int(prep_x), bar_y + bar_h + 3), 1)
 
-    # --- main render ---
+    # main render
 
     def render(self, agents, walls, boxes=None, ramp=None, goal_pos=None, info=None):
         self.frame += 1

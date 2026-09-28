@@ -1,26 +1,7 @@
-"""
-Reverse-curriculum vectorized recurrent trainer — the one untried lever for rung 1.
+"""Train with a reverse curriculum for doorway box placement.
 
-Every prior rung-1 attempt used the doorway assist at a FIXED, low mixture (8% sealed /
-12% placed / 20% near / 60% nothing), constant for the whole run. That is a static
-mixture, not a curriculum: 60% of episodes get zero help from step one, and the precise
-box-into-doorway push is never randomly sampled, so PPO gets ~zero gradient toward it.
-
-This trainer instead ANNEALS the assist. Early on ~90% of episodes spawn box 0 in or just
-above the doorway (the barricade's endpoint), and the hider only has to press lock / push a
-little. As training proceeds, BOTH the assist probability AND the push distance anneal to
-zero, so the hider must learn the push chain backward — from "just lock it" to "push it all
-the way from the default spawn and lock" — until it barricades with no help at all. That is
-the honest-eval condition, so if backward chaining works, rung 1 shows up unassisted.
-
-Warm-started from the 120M policies (strong evasion + rung 2 already in place), so the
-reverse curriculum only has to add the construction skill on top.
-
-Usage: python train_hs7_lstm_vec_rc.py [total] [rc_end] [_unused]
-                                       [--envs=N] [--steps=per_env] [--hidden=N] [--load=prefix]
-  total  = total steps per team (default 50M)
-  rc_end = step at which the door assist fully anneals to zero (default 30M)
-"""
+Start with a prelocked box, then require locking and progressively longer pushes.
+Keep a fixed fraction of episodes unassisted and fade the curriculum by RC_END."""
 
 import copy
 import random
@@ -35,8 +16,8 @@ from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBu
 torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
 
 
-# ---- config ----
-SAVE_PREFIX = "hs_lstmrc"                     # NOTE: distinct prefix — never clobbers shipped hs_lstm_*
+# config
+SAVE_PREFIX = "hs_lstmrc"                     # NOTE: distinct prefix; never clobbers shipped hs_lstm_*
 N_ENVS = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--envs=")), 10))
 STEPS_PER_ENV = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--steps=")), 800))
 _ints = [int(a) for a in sys.argv[1:] if not a.startswith("--")]
@@ -52,7 +33,7 @@ P2 = 1.0                                       # both seekers active from step 1
 # unassisted spawn sits at y~155. Assisted push_y interpolates door(222) -> default(155).
 DOOR_Y = 222.0
 FAR_Y = 155.0
-HONEST_FRAC = 0.18                              # always-unassisted episodes (honest practice, keeps evasion/rung2 alive)
+HONEST_FRAC = 0.18                              # always-unassisted episodes (unassisted episodes throughout training)
 
 
 def make_env():
@@ -95,12 +76,8 @@ def reset_options(steps):
             "seeker_on_ramp": on_ramp,
             "ramp_locked": (not on_ramp) and r < 0.05,
             "hider_on_ramp": (not on_ramp) and 0.05 <= r < 0.10}
-    # 3-PHASE reverse curriculum on the barricade — decouple the two atoms the fixed-mixture
-    # runs never taught: (A) sealed-state VALUE + lock-press with the box prelocked; (B) the
-    # LOCK-PRESS itself, box handed to the hider in the doorway unlocked, its only job to lock
-    # it; (C) the PUSH, box distance grown door->far. Assist fades to zero by RC_END, so the
-    # end state is the honest no-assist condition. A constant HONEST_FRAC of episodes are
-    # unassisted throughout so evasion/rung 2 don't decay and honest play stays in-distribution.
+    # Start with a prelocked box, then require locking and progressively longer pushes.
+    # Keep some episodes unassisted and fade the curriculum by RC_END.
     p, _ = rc_phase(steps)
     if p >= 1.0 or random.random() < HONEST_FRAC:
         return opts
@@ -124,7 +101,7 @@ def zero_hidden_slots(hc, rows):
         hc[1][:, row, :] = 0.0
 
 
-# ---- main loop ----
+# main loop
 best_mean_return = {t: float("-inf") for t in TEAMS}
 steps_done = {t: 0 for t in TEAMS}
 episode_returns = {t: [] for t in TEAMS}
@@ -230,7 +207,7 @@ while min(steps_done.values()) < TOTAL_TIMESTEPS:
             lo = -3.0 if learner == "hider" else -1.4
             live[learner].ac.log_std.clamp_(min=lo, max=0.0)
 
-    # ---- logging + save-best + snapshot ----
+    # logging + save-best + snapshot
     lsteps = min(steps_done.values())
     _p, _ph = rc_phase(lsteps)
     parts = [f"Iter {iteration}", f"Steps {lsteps}",
