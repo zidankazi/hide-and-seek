@@ -1,7 +1,6 @@
-"""Render one specified evaluation episode to a GIF, with its seed and provenance."""
+"""Replay a saved policy at a given seed and write a GIF."""
 
 import argparse
-import json
 import os
 import random
 from pathlib import Path
@@ -16,13 +15,10 @@ from PIL import Image, ImageDraw
 
 from evaluate import (
     PRESETS,
-    ROOT,
     Policies,
     configure_torch,
     environment_config,
     ramp_sightlines,
-    run_episode,
-    sha256,
 )
 from hide_and_seek.env_hs import HideAndSeekEnv
 
@@ -54,10 +50,10 @@ def render(preset, seed, output, final=False):
             canvas = Image.new("RGB", (560, 674), (248, 248, 251))
             canvas.paste(frame, (0, 50))
             draw = ImageDraw.Draw(canvas)
-            draw.text((16, 8), f"{preset} | seed {seed} | selected episode", fill=(35, 40, 50))
+            draw.text((16, 8), f"{preset} | seed {seed}", fill=(35, 40, 50))
             draw.text(
                 (16, 27),
-                "Red line: sight gained through ramp proximity. No wall climbing.",
+                "Red line: a sightline gained from elevation",
                 fill=(80, 85, 95),
             )
             frames.append(canvas)
@@ -67,32 +63,7 @@ def render(preset, seed, output, final=False):
     frames[0].save(
         output, save_all=True, append_images=frames[1:], duration=50, loop=0, optimize=True
     )
-    frames[len(frames) // 2].save(output.with_suffix(".png"))
-    metadata = {
-        "preset": preset,
-        "seed": seed,
-        "selected_example": True,
-        "selection_note": "Illustrative episode; use the 200-episode reports for frequencies.",
-        "environment": environment_config(preset),
-        "checkpoints": {
-            team: {"file": str(path.relative_to(ROOT)), "sha256": sha256(path)}
-            for team, path in policies.paths.items()
-        },
-        "metrics": run_episode(preset, policies, seed),
-        "source_sha256": {
-            name: sha256(Path(__file__).resolve().parent / name)
-            for name in (
-                "demo.py",
-                "evaluate.py",
-                "hide_and_seek/env_hs.py",
-                "hide_and_seek/renderer.py",
-            )
-        },
-        "frames": len(frames),
-        "duration_ms_per_frame": 50,
-    }
-    output.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
-    print(f"Saved {output} ({len(frames)} frames), poster and episode metadata")
+    print(f"Saved {output}: {preset}, seed {seed}, {len(frames)} frames")
 
 
 def main():
