@@ -1,5 +1,12 @@
 # Hide & Seek — Project Journal
 
+> **Historical journal.** This file preserves the interpretations made during development,
+> including claims later corrected. The concluded study and current measurements are in
+> [docs/study.md](docs/study.md). In particular, ramp proximity is not climbing, a lock does
+> not establish defense, and these experiments do not prove that compute cannot help.
+> Paths below refer to the original flat layout. See [the file map](experiments/file-map.json)
+> for the current locations.
+
 Building toward reproducing emergent tool-use from OpenAI's 2019 multi-agent hide-and-seek paper. Six-stage roadmap: continuous PPO → custom env → multi-agent → self-play → full hide-and-seek → analysis.
 
 ---
@@ -20,7 +27,7 @@ Started with a pygame demo that drew a single white circle bouncing around in a 
 
 **Pivot 1: dark cyberpunk theme.** Added neon-blue glowing agent, particle trails, force/velocity arrows, animated goal pulse, dark background with concentric ring overlays. Looked cool in isolation but didn't match the friendly aesthetic of the OpenAI paper.
 
-**Pivot 2: clean OpenAI-style aesthetic.** User shared a screenshot from OpenAI's hide-and-seek video — bright, charming, cute character agents. Rebuilt the renderer:
+**Pivot 2: clean OpenAI-style aesthetic.** Went back to a screenshot I'd saved off OpenAI's hide-and-seek video: bright, charming, cute character agents. Rebuilt the renderer:
 - Light grey arena floor with subtle alternating-tile pattern
 - Walls with 3D depth (top + front + right faces, drop shadows)
 - Agents as colored circles with tracking eyes, base "pedestal" rings (matching OpenAI's avatar style), gentle bobbing animation
@@ -30,7 +37,7 @@ Started with a pygame demo that drew a single white circle bouncing around in a 
 - Bottom HUD: phase pill (PREP/PLAY), episode/step/reward counters, timeline progress bar
 - Y-sorting so closer objects draw on top
 
-Took ~3 full rewrites of `renderer.py` to land on the right look. Worth it — the visual quality is now demo-ready.
+Took ~3 full rewrites of `renderer.py` to land on the right look. Worth it; the visual quality is now demo-ready.
 
 ### Env design
 
@@ -51,7 +58,7 @@ Hooked the env into `ppo_continuous.py` with `env = HideAndSeekEnv()`. Saved `po
 **Trajectory:**
 - 0–340k steps: random-policy baseline (~-200 mean return)
 - 340k–460k: **learned!** Episodes per rollout jumped from 5 to 20+, returns hit -13 to -45
-- 460k–1M: **diverged** — returns crashed to -1000, -3000, even -5000
+- 460k–1M: **diverged**. Returns crashed to -1000, -3000, even -5000
 
 Classic PPO failure mode: `log_std` collapsed too far, policy got overconfident in bad actions, value function diverged, each update made it worse.
 
@@ -68,9 +75,9 @@ Changed the save logic to track `best_mean_return` and only save when beaten. Re
 - Never improved over the remaining 850k steps
 - `policy.pt` locked in at peak
 
-Worse peak than run 1 (-60 vs -13) because PPO is stochastic — different random seeds give different trajectories. But the policy is *saved* this time, even though training continued to diverge afterward.
+Worse peak than run 1 (-60 vs -13) because PPO is stochastic; different random seeds give different trajectories. But the policy is *saved* this time, even though training continued to diverge afterward.
 
-**Lesson learned:** always save best, not last. Single line fix, but it's the difference between "we trained an agent" and "we trained an agent and then erased it."
+Always save best, not last. Single line fix, but it's the difference between "we trained an agent" and "we trained an agent and then erased it."
 
 ### Where -60 puts us
 - ~-235: random baseline
@@ -78,7 +85,7 @@ Worse peak than run 1 (-60 vs -13) because PPO is stochastic — different rando
 - ~0: reaches consistently in 30-60 steps
 - +2 to +5: reaches in <20 steps (bonus outweighs dense cost)
 
-### Stage 2 status
+### Stage 2 wrap
 Pipeline is proven end-to-end: custom Gymnasium env + Pymunk physics + continuous PPO + clean renderer + save/load. The task itself is simple (point-to-point navigation) and the agent half-learned it. Could push higher with reward shaping or relative observations, but diminishing returns vs moving on to multi-agent.
 
 ---
@@ -174,21 +181,21 @@ Calling Stage 3 done. Next: self-play with policy snapshotting and opponent samp
 
 Built `train_selfplay.py` to kill Stage 3's non-stationarity collapse. Core idea: never train a live agent against the live opponent. Each iteration:
 - **Rollout A:** live hider vs a *frozen* seeker sampled from a pool of past seeker snapshots. Only the hider stores transitions and updates.
-- **Rollout B:** mirror — live seeker vs a frozen hider from the hider pool.
+- **Rollout B:** the mirror image, live seeker vs a frozen hider from the hider pool.
 
 A frozen opponent is stationary within an episode, so each learner sees a stable target instead of a co-adapting one. A new frozen opponent is resampled at every env reset (~8–10 per rollout) for generalization across the pool.
 
 ### Two design decisions that mattered
 
-1. **Snapshot on improvement, not on a timer (v2).** v1 snapshotted every K iters; the pool filled with ~97% copies of barely-trained noise, so opponents were mostly random and self-play plateaued. Switched to snapshotting only when the live policy beats its all-time best — same trigger as save-best — so the pool is a *quality ladder* of progressively stronger past selves.
+1. **Snapshot on improvement, not on a timer (v2).** v1 snapshotted every K iters; the pool filled with ~97% copies of barely-trained noise, so opponents were mostly random and self-play plateaued. Switched to snapshotting only when the live policy beats its all-time best (same trigger as save-best), so the pool is a *quality ladder* of progressively stronger past selves.
 2. **Catch bonus ±0.05 → ±1.0.** With the old scaling a catch was ~2% of total episode signal vs ~98% per-step ±0.01, so PPO's gradient barely saw the catch event. ±1.0 makes a catch worth ~30% of max per-episode return, so the policy actually gets pushed toward/away from catches.
 
-### Run: 977 iterations, 2M steps/agent
+### The run (977 iters, 2M steps/agent)
 
 - Pools grew hider 1→7, seeker 1→7 (paired snapshotting: if either role improves, both get snapshotted, since the hider metric saturates at +2.4 and can't visibly "improve" on its own).
 - Seeker best return climbed −2.4 (random) → −0.942, **with real late gains at iter 420 and iter 827 (near the very end)**. No regression to baseline.
 
-**The headline: no collapse.** Stage 3 peaked at ~251k steps then drifted back to random by 2M. Stage 4 held — and improved — its gains across the full run. That's the whole point of self-play, confirmed.
+**The headline: no collapse.** Stage 3 peaked at ~251k steps then drifted back to random by 2M. Stage 4 held its gains across the full run, and improved on them. That's the whole point of self-play, confirmed.
 
 ### Eval: catch rate + cross-matchups (200 fixed-seed episodes, deterministic actions)
 
@@ -202,16 +209,16 @@ Head-to-head trained-vs-trained: **30.5% catch rate** vs Stage 3's 12.5%. But ca
 | Stage 4 | Stage 3 | 13.5% | 129 |
 
 Reading it:
-- **Seeker learned a lot** — ~doubled its catch rate (12.5% → ~29–30%) against *any* hider. This is the big winner.
-- **Hider learned modest, real evasion — delay, not escape.** Against the strong Stage 4 seeker it's caught at the same rate as the clueless Stage 3 hider but survives ~20% longer when caught (149 vs 124 steps). It learned to drag out the chase, not to get away.
+- **Seeker learned a lot:** ~doubled its catch rate (12.5% → ~29–30%) against *any* hider. This is the big winner.
+- **Hider learned modest, real evasion: delay, not escape.** Against the strong Stage 4 seeker it's caught at the same rate as the clueless Stage 3 hider but survives ~20% longer when caught (149 vs 124 steps). It learned to drag out the chase, not to get away.
 
 ### Why the hider only delays
 
-In an empty arena with equal speeds, the hider fundamentally *cannot* escape a competent seeker — geometry doesn't allow it. It can only prolong survival. Decisive evasion requires **tools**: walls to break line-of-sight, movable boxes to build cover. That's Stage 5. So Stage 4 fixed the training-stability problem (the actual goal), and the hider hit the ceiling of what's achievable in an empty box.
+In an empty arena with equal speeds, the hider fundamentally *cannot* escape a competent seeker; geometry doesn't allow it. It can only prolong survival. Decisive evasion requires **tools**: walls to break line-of-sight, movable boxes to build cover. That's Stage 5. So Stage 4 fixed the training-stability problem (the actual goal), and the hider hit the ceiling of what's achievable in an empty box.
 
-### Stage 4 status
+### Stage 4 wrap
 
-Done. Self-play with a quality-ladder opponent pool eliminates the non-stationarity collapse: both policies now improve and hold. Eval scripts added (`eval_headless.py`, `eval_cross.py`). Next: Stage 5 — the real hide-and-seek environment (walls, movable + lockable boxes, lidar, ego-centric observations) where tool-use can actually emerge.
+Done. Self-play with a quality-ladder opponent pool eliminates the non-stationarity collapse: both policies now improve and hold. Eval scripts added (`eval_headless.py`, `eval_cross.py`). Next: Stage 5, the real hide-and-seek environment (walls, movable + lockable boxes, lidar, ego-centric observations) where tool-use can actually emerge.
 
 ---
 
@@ -224,14 +231,14 @@ New `env_hs.py` (`HideAndSeekEnv`), leaving `TagEnv` in `env.py` untouched. Key 
 What's in the skeleton:
 - **Fixed map:** a 240×240 room in the top-left corner (arena edge walls + 3 interior segments) with a single 60px doorway in the bottom wall. Hider spawns inside, seeker outside.
 - **Prep phase:** first 40% of the episode (96 of 240 steps) the seeker is frozen (force suppressed + velocity pinned to zero), hider moves freely, no reward accrues.
-- **Movable boxes:** `N_BOXES=2` dynamic pymunk box bodies (mass 3 — pushable by an agent but heavy enough to build a wall), repositioned inside the room each reset.
+- **Movable boxes:** `N_BOXES=2` dynamic pymunk box bodies (mass 3: pushable by an agent but heavy enough to build a wall), repositioned inside the room each reset.
 - **Obs (21 dims):** self(4) + opponent(4 + visible flag) + 2 boxes×(4 + lock_state + visible flag). Lock/visible are stubbed (always visible, lock_state 0) until 5b.
 - **Action (3 dims):** `[fx, fy, lock]`; the lock signal is inert in 5a.
-- **Reward (temporary):** touch-tag, play-phase only — just to smoke-test motion/boxes/prep before LOS replaces it in 5b.
+- **Reward (temporary):** touch-tag, play-phase only, just to smoke-test motion/boxes/prep before LOS replaces it in 5b.
 
-Verified headless: obs/act dims correct, seeker displacement during prep = 0.0, boxes get pushed, prep reward 0/0, episodes truncate at 240 cleanly. Also ran a 3-iteration self-play integration test — `train_selfplay.py`'s loop wires up to the new env (21/3 dims) with no changes needed. Added `watch_hs.py` (random-ish viewer) to eyeball geometry + prep freeze.
+Verified headless: obs/act dims correct, seeker displacement during prep = 0.0, boxes get pushed, prep reward 0/0, episodes truncate at 240 cleanly. Also ran a 3-iteration self-play integration test: `train_selfplay.py`'s loop wires up to the new env (21/3 dims) with no changes needed. Added `watch_hs.py` (random-ish viewer) to eyeball geometry + prep freeze.
 
-Next: 5b — the real game (LOS visibility reward + obs masking + lock mechanic), where hiding behind the barricade finally pays off.
+Next: 5b, the real game (LOS visibility reward + obs masking + lock mechanic), where hiding behind the barricade finally pays off.
 
 ---
 
@@ -240,15 +247,16 @@ Next: 5b — the real game (LOS visibility reward + obs masking + lock mechanic)
 Wired up the real game (`env_hs.py`): line-of-sight visibility reward, obs masking, and the box-lock mechanic.
 
 ### Mechanics (all validated in isolation before training)
-- **LOS reward:** each play-phase step, `segment_query_first` raycasts seeker→hider; seeker gets `+1/PLAY_STEPS` when the line is clear, hider gets it when a wall/box occludes. Episode return ∈ [-1,+1] = the hider's hidden-fraction. No contact-termination — pure visibility over a fixed horizon.
+- **LOS reward:** each play-phase step, `segment_query_first` raycasts seeker→hider; seeker gets `+1/PLAY_STEPS` when the line is clear, hider gets it when a wall/box occludes. Episode return ∈ [-1,+1] = the hider's hidden-fraction. No contact-termination: pure visibility over a fixed horizon.
 - **Perception via shape-filter categories:** LOS rays mask to OCCLUDER_CAT so they hit only walls/boxes and pass through agents. Obs masking is real: opponent/box fields zero out when not in sight.
 - **Lock:** `action[2] > 0.5` rising-edge toggles the nearest box within reach. Lock → STATIC (owner set); owner-unlock → DYNAMIC (mass/moment restored); other team can't unlock. Locked boxes stop dead *and* still occlude rays.
-- **Bug caught:** teleported dynamic boxes have stale broadphase entries, so the first-frame LOS obs after `reset()` was wrong until I added a per-box `reindex_shapes_for_body`. (During `step()` it's fine — `space.step()` reindexes.)
+- **Bug caught:** teleported dynamic boxes have stale broadphase entries, so the first-frame LOS obs after `reset()` was wrong until I added a per-box `reindex_shapes_for_body`. (During `step()` it's fine; `space.step()` reindexes.)
 
-### Run: 977 iterations, 2M steps/agent
-- Pools grew to **17 each** (vs 7 in Stage 4) — far more improvement events, i.e. healthier back-and-forth learning. No collapse.
+### The run
+- 977 iterations, 2M steps/agent.
+- Pools grew to **17 each** (vs 7 in Stage 4): far more improvement events, i.e. healthier back-and-forth learning. No collapse.
 - **Seeker learned to hunt:** best return −0.490 → −0.057 (iter 510). It learned to enter the room and find frozen hiders, cutting their hidden-fraction from ~74% toward ~47%.
-- Hider stayed highly hidden (~0.8–0.97) throughout — but hidden-fraction alone can't tell "actively barricades" from "walls hide it for free."
+- Hider stayed highly hidden (~0.8–0.97) throughout, but hidden-fraction alone can't tell "actively barricades" from "walls hide it for free."
 
 ### Eval: is the hider actually using tools? (`eval_hs.py`, 200 eps, deterministic)
 
@@ -260,29 +268,30 @@ Wired up the real game (`env_hs.py`): line-of-sight visibility reward, obs maski
 | hidden-fraction, hider disabled (walls only) | 83.9% |
 | **hider's active contribution** | **+8.0pp** |
 
-**Partial emergence — the honest result.** The hider genuinely learned to *lock boxes* (58% of episodes) and uses them plus movement as cover for a real +8pp over passive walls. But it did **not** reliably learn the paper's headline "seal the doorway" strategy — boxes get locked as ad-hoc cover near the hider (mean 104px from the door), not in the gap. The capability exists (best case sealed it at 32px) but isn't consistent.
+**Partial emergence.** The hider genuinely learned to *lock boxes* (58% of episodes) and uses them plus movement as cover for a real +8pp over passive walls. But it did **not** reliably learn the paper's headline "seal the doorway" strategy — boxes get locked as ad-hoc cover near the hider (mean 104px from the door), not in the gap. The capability exists (best case sealed it at 32px) but isn't consistent.
 
-**Why it stalled at the local optimum:** the corner room already hides the hider ~84% for free, so the gradient toward the much harder, precise multi-step "push-box-into-doorway-during-prep" behavior is weak. The hider banked the easy reward and never had strong pressure to find the door-block. This is a reward-landscape problem, not a mechanics problem — the env supports the full behavior, the incentive just isn't sharp enough yet.
+**Why it stalled at the local optimum:** the corner room already hides the hider ~84% for free, so the gradient toward the much harder, precise multi-step "push-box-into-doorway-during-prep" behavior is weak. The hider banked the easy reward and never had strong pressure to find the door-block. This is a reward-landscape problem, not a mechanics problem: the env supports the full behavior, the incentive just isn't sharp enough yet.
 
 ### Options to push toward the full barricade (Stage 5b-ii, if pursued)
-1. **Weaken passive hiding** — bigger doorway, or seeker spawns with partial LOS into the room, so the hider *must* block the door to score.
-2. **Shaping** — small bonus for a box occupying the doorway during play (risks over-engineering vs the paper's pure reward).
+1. **Weaken passive hiding:** bigger doorway, or seeker spawns with partial LOS into the room, so the hider *must* block the door to score.
+2. **Shaping:** small bonus for a box occupying the doorway during play (risks over-engineering vs the paper's pure reward).
 3. **Longer training / bigger pool**, or more boxes so cover-building is easier to stumble into.
-4. **Open arena** (no free-hiding room) — forces the hider to *build* cover from scratch, which is closer to the paper's box-fort emergence.
+4. **Open arena** (no free-hiding room): forces the hider to *build* cover from scratch, which is closer to the paper's box-fort emergence.
 
-### Stage 5b status
+### Where 5b lands
 Mechanics complete and correct; genuine but partial tool-use emerged (box-locking for cover, not doorway-barricading). Documented as-is. Decision pending on whether to push barricade emergence (5b-ii) or move to ramps (5c). `eval_hs.py` added; policies saved to `hs_hider.pt` / `hs_seeker.pt`.
 
 ---
 
-## 2026-07-14 — Stage 5b-ii: open arena — seeker wins the arms race
+## 2026-07-14 — Stage 5b-ii: open arena, seeker wins the arms race
 
-5b's partial emergence was blamed on the room hiding the hider ~84% for free. Fix: an open-arena layout (`HideAndSeekEnv(layout="open")`) — no interior walls, 4 boxes, hider spawns in a random corner. To hide at all it must push+lock boxes to close a corner pocket. Sanity check held: with the hider disabled, walls-alone hidden-fraction is **35.7%** (vs 84% in the room), so passive hiding is largely gone and the incentive to build cover is sharp. Room layout kept intact (obs 21 / 2 boxes) for 5b reproducibility; open is obs 33 / 4 boxes.
+5b's partial emergence was blamed on the room hiding the hider ~84% for free. Fix: an open-arena layout (`HideAndSeekEnv(layout="open")`) with no interior walls, 4 boxes, hider spawns in a random corner. To hide at all it must push+lock boxes to close a corner pocket. Sanity check held: with the hider disabled, walls-alone hidden-fraction is **35.7%** (vs 84% in the room), so passive hiding is largely gone and the incentive to build cover is sharp. Room layout kept intact (obs 21 / 2 boxes) for 5b reproducibility; open is obs 33 / 4 boxes.
 
-### Run: 977 iterations, 2M steps/agent
-- The starting point is now paper-like: the hider *loses* by default — iter 1 hidden ~30%, return −0.39, seeker dominant.
+### The run
+- 977 iterations, 2M steps/agent.
+- The starting point is now paper-like: the hider *loses* by default. Iter 1 hidden ~30%, return −0.39, seeker dominant.
 - Pools grew to **19 each**. No collapse.
-- Hider best-saved return climbed −0.39 → **+0.54** (iter 909) — but that's against a *pooled* opponent sample (includes weak early seekers).
+- Hider best-saved return climbed −0.39 → **+0.54** (iter 909), but that's against a *pooled* opponent sample (includes weak early seekers).
 
 ### Eval: the honest verdict (`eval_hs.py open`, 200 eps, deterministic, best-vs-best)
 
@@ -293,34 +302,34 @@ Mechanics complete and correct; genuine but partial tool-use emerged (box-lockin
 | hidden-fraction, hider disabled (walls only) | 31.3% |
 | **hider's active contribution** | **+1.5%** |
 
-**The seeker won the arms race.** Against the fully-trained seeker the hider is hidden only 32.8% — barely above the 31.3% passive floor. It learned the *lock tool* (50% of episodes) but the locked boxes don't provide effective cover: its active contribution is a negligible +1.5%. The training-log peak of +0.54 was against pooled (partly weak) seekers; head-to-head against the best seeker, the hider loses.
+**The seeker won the arms race.** Against the fully-trained seeker the hider is hidden only 32.8%, barely above the 31.3% passive floor. It learned the *lock tool* (50% of episodes) but the locked boxes don't provide effective cover: its active contribution is a negligible +1.5%. The training-log peak of +0.54 was against pooled (partly weak) seekers; head-to-head against the best seeker, the hider loses.
 
-**Why fort-building didn't emerge:** in an open arena with 4 boxes and a same-speed seeker, an *effective* barricade must be topologically closed — a partial box wall blocks one sightline and the seeker just circles it. Constructing a sealed pocket during the 96-step prep is a hard, sparse-reward, precise-multi-step problem; the seeker's job (keep LOS, navigate around obstacles) is far easier to learn. So the equilibrium favors the seeker. This matches the paper's own experience: box-fort emergence there needed hundreds of millions of steps, more agents and boxes, and auto-curricula. At 1v1 / 4 boxes / 2M steps with vanilla PPO, the seeker dominating is the expected outcome.
+**Why fort-building didn't emerge:** in an open arena with 4 boxes and a same-speed seeker, an *effective* barricade must be topologically closed: a partial box wall blocks one sightline and the seeker just circles it. Constructing a sealed pocket during the 96-step prep is a hard, sparse-reward, precise-multi-step problem; the seeker's job (keep LOS, navigate around obstacles) is far easier to learn. So the equilibrium favors the seeker. This matches the paper's own experience: box-fort emergence there needed hundreds of millions of steps, more agents and boxes, and auto-curricula. At 1v1 / 4 boxes / 2M steps with vanilla PPO, the seeker dominating is the expected outcome.
 
 ### What both 5b and 5b-ii establish
-The lock/LOS *mechanics* work and the *tool* (box-locking) is genuinely used in both layouts. What did **not** emerge at this scale is effective *strategic construction* — a barricade good enough to beat a competent seeker. That's a scale/curriculum gap, not a bug: the env supports the behavior, the compute+population budget to discover it is the missing piece.
+The lock/LOS *mechanics* work and the *tool* (box-locking) is genuinely used in both layouts. What did **not** emerge at this scale is effective *strategic construction*, i.e. a barricade good enough to beat a competent seeker. That's a scale/curriculum gap, not a bug: the env supports the behavior, the compute+population budget to discover it is the missing piece.
 
-### Stage 5b status (final)
-Two honest results banked: room = tool-use present but crutched by free walls (+8pp); open = no free hiding and the seeker wins (+1.5pp). Policies: `hs_*.pt` (room), `hs_open_*.pt` (open). Next-step options: (a) chase full emergence with real scale (2v2, 6+ boxes, 10M+ steps, maybe light shaping) — expensive; (b) Stage 5c ramps; (c) Stage 6 — write up the partial-emergence findings as the project's result, which is itself a faithful small-scale reproduction of "tool-use appears, full fort-building needs scale."
+### 5b closed out
+Two honest results banked: room = tool-use present but crutched by free walls (+8pp); open = no free hiding and the seeker wins (+1.5pp). Policies: `hs_*.pt` (room), `hs_open_*.pt` (open). Next-step options: (a) chase full emergence with real scale (2v2, 6+ boxes, 10M+ steps, maybe light shaping), which is expensive; (b) Stage 5c ramps; (c) Stage 6, write up the partial-emergence findings as the project's result, which is itself a faithful small-scale reproduction of "tool-use appears, full fort-building needs scale."
 
 ---
 
-## 2026-07-14 — Stage 5c: 2v2 scale-up — scale made it worse, not better
+## 2026-07-14 — Stage 5c: 2v2 scale-up, and scale made it worse
 
-Chased real fort-building emergence with the agreed "expensive" config: **2v2, open arena, 6 boxes, 10M env steps/team (5x), pure LOS reward** (no shaping). Wall time ~2.5h.
+Chased real fort-building emergence with the expensive config: **2v2, open arena, 6 boxes, 10M env steps/team (5x), pure LOS reward** (no shaping). Wall time ~2.5h.
 
-### What was built
-- `env_hs.py` generalized to teams: `HideAndSeekEnv(layout, team_size=1, n_boxes=None)`. With `team_size>=2` the agents are `hider_0..seeker_N-1`; per-agent obs = self + every other agent (teammates first, all LOS-masked — shared policy, not a radio) + boxes (55 dims at 2v2/6 boxes); box locks are owned per-TEAM (either teammate can unlock, opponents can't); the LOS reward is team-level (seekers score when ANY seeker sees ANY hider, hiders only when ALL are unseen); both seekers freeze during prep; the hider pair spawns in one corner pocket. `team_size=1` is byte-for-byte the old 1v1 — regression-checked against the recorded 5b-ii eval numbers.
-- `train_hs2.py`: one shared PPO policy per team, but a rollout buffer PER TEAMMATE so GAE never walks across trajectories (per-member advantages computed separately, concatenated for the minibatch update). Per-team quality-ladder pools, same snapshot rules as Stage 4/5b.
+### Env + trainer changes
+- `env_hs.py` generalized to teams: `HideAndSeekEnv(layout, team_size=1, n_boxes=None)`. With `team_size>=2` the agents are `hider_0..seeker_N-1`; per-agent obs = self + every other agent (teammates first, all LOS-masked: shared policy, not a radio) + boxes (55 dims at 2v2/6 boxes); box locks are owned per-TEAM (either teammate can unlock, opponents can't); the LOS reward is team-level (seekers score when ANY seeker sees ANY hider, hiders only when ALL are unseen); both seekers freeze during prep; the hider pair spawns in one corner pocket. `team_size=1` is byte-for-byte the old 1v1, regression-checked against the recorded 5b-ii eval numbers.
+- `train_hs2.py`: one shared PPO policy per team, but a rollout buffer *per teammate* so GAE never walks across trajectories (per-member advantages computed separately, concatenated for the minibatch update). Per-team quality-ladder pools, same snapshot rules as Stage 4/5b.
 
-### Run: 4883 iterations, 10M steps/team, pools 18/18
-- Paper-like start, brutal for hiders: two seekers seeing ANY hider puts the iter-1 hidden-fraction at ~4–18% (vs ~30% at 1v1).
+### The run (4883 iters, 10M steps/team, pools 18/18)
+- Paper-like start, brutal for hiders: two seekers seeing *any* hider puts the iter-1 hidden-fraction at ~4–18% (vs ~30% at 1v1).
 - Hider best-saved climbed −0.61 → **+0.033** (iter 4616) against the pooled seeker sample; at run end the live seeker sat at +0.86–0.91 vs the pooled hiders. The seekers stayed decisively on top the whole run.
 
 ### Trainer flaw the eval exposed: save-best saturation
-`hs_2v2_seeker.pt` is an **iter-4 seeker**: the seeker's mean return hit a perfect +1.000 against the weak early hider pool at iteration 4 and by construction could never "improve" again, so its best-checkpoint froze there. "Best-vs-best" eval therefore pits the best hider against a nearly untrained seeker team. (1v1 runs never tripped this because a lone seeker never saturated the metric.) `train_hs2.py` now also saves `*_final.pt` end-of-run weights, and `eval_hs2.py` takes `--final`; for THIS run the final live weights are gone — the log is the evidence for the trained seeker's strength.
+`hs_2v2_seeker.pt` is an **iter-4 seeker**: the seeker's mean return hit a perfect +1.000 against the weak early hider pool at iteration 4 and by construction could never "improve" again, so its best-checkpoint froze there. "Best-vs-best" eval therefore pits the best hider against a nearly untrained seeker team. (1v1 runs never tripped this because a lone seeker never saturated the metric.) `train_hs2.py` now also saves `*_final.pt` end-of-run weights, and `eval_hs2.py` takes `--final`; for this run the final live weights are gone, so the log is the evidence for the trained seeker's strength.
 
-### Eval (`eval_hs2.py`, 200 eps, deterministic)
+### Numbers (`eval_hs2.py`, 200 eps, deterministic)
 
 | metric | 2v2 (vs iter-4 seeker!) | 1v1 open (5b-ii) |
 |--------|------------------------|------------------|
@@ -330,12 +339,12 @@ Chased real fort-building emergence with the agreed "expensive" config: **2v2, o
 | geometry-only floor (hiders disabled) | 18.2% | 31.3% |
 | hider active contribution | **−8.5pp** | +1.5pp |
 
-**Even against a nearly untrained seeker pair, the hider team hides less than 10% of the play phase** — and moving hiders get seen MORE than motionless corner-sitters (negative contribution: activity without cover is exposure). Tool-use regressed: lock rate halved vs 1v1, ~0.2 boxes locked per episode. No forts.
+**Even against a nearly untrained seeker pair, the hider team hides less than 10% of the play phase**, and moving hiders get seen *more* than motionless corner-sitters (negative contribution: activity without cover is exposure). Tool-use regressed: lock rate halved vs 1v1, ~0.2 boxes locked per episode. No forts.
 
-### Verdict: at this compute class, adding agents raises the bar faster than it raises the learning
-The 2v2 scale-up made the hiders' problem strictly harder — two seekers cover sightlines superlinearly, the ANY-hider team reward means one exposed teammate zeroes both, and an effective fort must now enclose two bodies — while giving the learner nothing extra to climb with (same sparse reward, same vanilla PPO, no curriculum). The paper's fort-building needed hundreds of millions of steps, larger populations, AND auto-curricula; 10M more-or-less confirms the 5b-ii conclusion from the other direction: **the missing ingredient isn't agents or boxes, it's compute + curriculum.**
+### At this compute class, adding agents raises the bar faster than it raises the learning
+The 2v2 scale-up made the hiders' problem strictly harder (two seekers cover sightlines superlinearly, the any-hider team reward means one exposed teammate zeroes both, and an effective fort must now enclose two bodies) while giving the learner nothing extra to climb with (same sparse reward, same vanilla PPO, no curriculum). The paper's fort-building needed hundreds of millions of steps, larger populations, AND auto-curricula; 10M more-or-less confirms the 5b-ii conclusion from the other direction: **the missing ingredient isn't agents or boxes, it's compute + curriculum.**
 
-### Stage 5c status
+### Where 5c leaves things
 Banked as the third honest data point: room = +8pp tool-use with free walls; 1v1 open = seeker wins (+1.5pp); 2v2 open at 5x steps = seekers win harder and tool-use regresses. Policies: `hs_2v2_*.pt` (with the saturation caveat above). Realistic next steps: (a) Stage 6 write-up of the emergence-needs-scale result; (b) curriculum (start 1v1, add the second seeker mid-run) or population-based training before spending more raw steps; (c) ramps (5c-original) on the 1v1 game where tool-use demonstrably works.
 
 ---
@@ -344,16 +353,16 @@ Banked as the third honest data point: room = +8pp tool-use with free walls; 1v1
 
 5c's diagnosis was that 2v2-from-scratch never gives the hiders a learnable gradient. Test: same 2v2 / open / 6 boxes / 10M steps / pure LOS reward, but episodes start 2-hiders-vs-1-seeker and P(second seeker active) anneals 0→1 between 4M and 6M steps. The curriculum changes who plays, never what is rewarded.
 
-### What was built
-- `env_hs.py`: per-episode `active_seekers` knob (`reset(options={"active_seekers": k})`). Dormant seekers are frozen for the whole episode AND excluded from the team LOS check; the obs layout stays full-2v2 so policies transfer across phases with no surgery. Verified with a staged scene: a hider standing in only the dormant seeker's sightline scores as hidden with `active=1`, seen with `active=2`.
-- `train_hs2c.py`: the ramp, plus two lessons from 5c applied — dormant seekers' transitions are NOT stored (frozen bodies get team rewards uncorrelated with their actions), and `best_mean_return` resets when the ramp completes so save-best reflects the full game. `*_final.pt` end-of-run weights always saved. `eval_hs2.py` grew `--prefix=`/`--final`.
+### Changes
+- `env_hs.py`: per-episode `active_seekers` knob (`reset(options={"active_seekers": k})`). Dormant seekers are frozen for the whole episode *and* excluded from the team LOS check; the obs layout stays full-2v2 so policies transfer across phases with no surgery. Verified with a staged scene: a hider standing in only the dormant seeker's sightline scores as hidden with `active=1`, seen with `active=2`.
+- `train_hs2c.py`: the ramp, plus two lessons from 5c applied: dormant seekers' transitions are *not* stored (frozen bodies get team rewards uncorrelated with their actions), and `best_mean_return` resets when the ramp completes so save-best reflects the full game. `*_final.pt` end-of-run weights always saved. `eval_hs2.py` grew `--prefix=`/`--final`.
 
-### Run: 4883 iterations, 10M steps/team, ramp completed at 6.0M
-- **The curriculum worked as a curriculum.** Phase 1 gave hiders a real gradient (hid ~0.33 vs one seeker, vs ~0.04–0.18 cold-start in 5c). Pools grew to **30/30** (5c: 18/18) — nearly double the improvement events, a much livelier arms race.
+### The run (4883 iters, 10M steps/team, ramp done at 6.0M)
+- **The curriculum worked as a curriculum.** Phase 1 gave hiders a real gradient (hid ~0.33 vs one seeker, vs ~0.04–0.18 cold-start in 5c). Pools grew to **30/30** (5c: 18/18): nearly double the improvement events, a much livelier arms race.
 - Post-ramp, at full 2v2, the hider best-saved climbed to **+0.174** vs the pooled seekers (iter 4482; 5c's equivalent peak was +0.033), and end-of-run hid-vs-pool sat at 0.12–0.24 (5c: 0.08–0.17).
-- Save-best saturation struck AGAIN even post-reset: the seeker hit a perfect +1.000 vs a pooled hider sample at iter 2961 and froze its best-checkpoint there. Against a dominant team, mean-return-vs-pool is just a weak selection signal; `*_final.pt` is the trustworthy artifact (and this time we have it).
+- Save-best saturation struck again even post-reset: the seeker hit a perfect +1.000 vs a pooled hider sample at iter 2961 and froze its best-checkpoint there. Against a dominant team, mean-return-vs-pool is just a weak selection signal; `*_final.pt` is the trustworthy artifact (and this time we have it).
 
-### Eval (`eval_hs2.py`, 200 eps, deterministic) — final weights, plus 5c for reference
+### Head-to-head numbers (`eval_hs2.py`, 200 eps, deterministic), final weights plus 5c for reference
 
 | metric | S6 final | S6 save-best | 5c (vs iter-4 seeker) |
 |--------|---------|--------------|----------------------|
@@ -363,13 +372,13 @@ Banked as the third honest data point: room = +8pp tool-use with free walls; 1v1
 | geometry-only floor | 14.1% | 14.5% | 18.2% |
 | hider active contribution | **−4.1pp** | −5.9pp | −8.5pp |
 
-Head-to-head, the trained seeker pair still crushes the hider pair: ~10% hidden, negative active contribution (moving without cover = exposure), and lock rate fell again (16% vs 25% in 5c vs 50% at 1v1) — under two-seeker pressure the hiders drift further from construction toward (futile) evasion. Note this eval is harsher than 5c's on its face: 5c's opposing seeker was accidentally untrained; here it's the genuine 10M-step seeker, and the hiders score about the same anyway.
+Head-to-head, the trained seeker pair still crushes the hider pair: ~10% hidden, negative active contribution (moving without cover = exposure), and lock rate fell again (16% vs 25% in 5c vs 50% at 1v1): under two-seeker pressure the hiders drift further from construction toward (futile) evasion. Note this eval is harsher than 5c's on its face: 5c's opposing seeker was accidentally untrained; here it's the genuine 10M-step seeker, and the hiders score about the same anyway.
 
-### Verdict: the curriculum fixed the learning, not the game
-Every training-side symptom 5c blamed improved — early gradient, pool growth, peak-vs-pool — and the head-to-head equilibrium didn't move. That's informative: the binding constraint is not the early-game gradient. A topologically-closed two-body fort, built in a 96-step prep under a sparse team reward, sits beyond what vanilla PPO with ~128-unit MLPs discovers in 10M steps regardless of how gently the difficulty ramps. The paper's recipe (hundreds of millions of steps, bigger populations, batched PPO at scale) remains the missing ingredient — our curriculum bought roughly a 5x better peak-vs-pool, and the gap is orders of magnitude.
+### The curriculum fixed the learning, not the game
+Every training-side symptom 5c blamed improved (early gradient, pool growth, peak-vs-pool) and the head-to-head equilibrium didn't move. That's informative: the binding constraint is not the early-game gradient. A topologically-closed two-body fort, built in a 96-step prep under a sparse team reward, sits beyond what vanilla PPO with ~128-unit MLPs discovers in 10M steps regardless of how gently the difficulty ramps. The paper's recipe (hundreds of millions of steps, bigger populations, batched PPO at scale) remains the missing ingredient. Our curriculum bought roughly a 5x better peak-vs-pool, and the gap is orders of magnitude.
 
-### Stage 6 status
-Fourth honest data point banked: curriculum improves every learning metric and leaves the equilibrium untouched. Policies: `hs_2v2c_*.pt` (save-best, post-ramp) and `hs_2v2c_*_final.pt` (end-of-run, preferred). With the scale hypothesis now tested from three angles (more steps, more agents, gentler curriculum), the natural close is the Stage 7 write-up — the project's result is a faithful small-scale map of exactly where emergence starts needing industrial compute.
+### Stage 6 wrap
+Fourth honest data point banked: curriculum improves every learning metric and leaves the equilibrium untouched. Policies: `hs_2v2c_*.pt` (save-best, post-ramp) and `hs_2v2c_*_final.pt` (end-of-run, preferred). With the scale hypothesis now tested from three angles (more steps, more agents, gentler curriculum), the natural close is the Stage 7 write-up: the project's result is a faithful small-scale map of exactly where emergence starts needing industrial compute.
 
 ---
 
@@ -377,17 +386,17 @@ Fourth honest data point banked: curriculum improves every learning metric and l
 
 Stages 5–6 concluded "emergence needs industrial compute." Stage 7 set out to falsify that by *engineering* the environment until the paper's full ladder actually emerges at desktop scale:
 
-- **rung 1** — hider barricades the doorway with a locked box
-- **rung 2** — seeker transports the ramp to the room and peeks over the wall
-- **rung 3** — hider locks the ramp away (or steals it) during prep
+- **rung 1**: hider barricades the doorway with a locked box
+- **rung 2**: seeker goes to the ramp and stands on it to see over the wall
+- **rung 3**: hider locks the ramp away (or steals it) during prep
 
-Roughly 22 training runs, ~300M env steps. The honest one-line result: **rung 2 genuinely emerged and is provably caused by multi-agent pressure; rung 3 weakly emerged; rung 1 (precise box-into-doorway construction) hit a real sample-complexity wall that ~15 targeted interventions could not break.** Along the way we found a bug that retroactively invalidates the Stage 5–6 "compute wall" conclusion.
+Roughly 22 training runs, ~300M env steps. The one-line result: **rung 2 genuinely emerged and is provably caused by multi-agent pressure; rung 3 weakly emerged; rung 1 (precise box-into-doorway construction) hit a real sample-complexity wall that ~15 targeted interventions could not break.** Along the way we found a bug that retroactively invalidates the Stage 5–6 "compute wall" conclusion.
 
 ### The ramp mechanic (env)
-2D translation of the paper's climb-over-the-wall ramp: a pushable, lockable object. Any agent within `RAMP_USE_DIST` of it is *elevated* — its line-of-sight ignores `LOW_CAT` occluders (boxes + interior walls, split out from arena-edge `WALL_CAT`) out to `ELEV_RANGE`. Range is what makes ramp *position* matter: a seeker must transport it near the room to see in, and locking it far away is a real hider counter (locked objects can't be pushed; locks are per-team). Curriculum knob `reset(options={"ramp_active": bool})` parks it inert so it can be annealed in without changing the 28→33-dim obs. All pre-ramp layouts verified byte-for-byte identical (trajectory-hash regression vs stashed code).
+2D translation of the paper's climb-over-the-wall ramp: a pushable, lockable object. Any agent within `RAMP_USE_DIST` of it is *elevated*: its line-of-sight ignores `LOW_CAT` occluders (boxes + interior walls, split out from arena-edge `WALL_CAT`) out to `ELEV_RANGE`. Range is what was *meant* to make ramp *position* matter: the idea was that a seeker must transport it near the room to see in, and that locking it far away is a real hider counter (locked objects can't be pushed; locks are per-team). In practice the ramp spawns inside `ELEV_RANGE` already, so transport never happens — see the 2026-07-28 addendum. Curriculum knob `reset(options={"ramp_active": bool})` parks it inert so it can be annealed in without changing the 28→33-dim obs. All pre-ramp layouts verified byte-for-byte identical (trajectory-hash regression vs stashed code).
 
 ### The bug that rewrites Stages 5–6: log_std runaway
-Run 1 (30M) NaN'd at 19.9M steps. Cause: the Gaussian entropy bonus puts a *constant upward* gradient on `log_std`, so with nothing to oppose it the exploration std ratchets up forever. By the crash it was ~e^30. Checking every prior checkpoint: Stage 4 (short) `log_std`≈0.0; **Stage 5b room — the one stage where tool-use emerged — only +0.6; the 10M-step Stage 6 runs +30 to +39** (sampling std ~1e13: every rollout action was random bang-bang). **The longer a run went, the more its policy was pure noise.** So "more compute didn't help, needs industrial scale" was contaminated — more steps meant more entropy runaway, not more learning. Fixes: clamp std in use to `[0.05, 1.0]` (later per-team floors), clamp the log-ratio before `exp`, finite-loss guard, entropy 0.02→0.005, clip env-applied actions to [-1,1]. Per-iteration `std` logging added so exploration health is always visible.
+Run 1 (30M) NaN'd at 19.9M steps. Cause: the Gaussian entropy bonus puts a *constant upward* gradient on `log_std`, so with nothing to oppose it the exploration std ratchets up forever. By the crash it was ~e^30. Checking every prior checkpoint: Stage 4 (short) `log_std`≈0.0; **Stage 5b room, the one stage where tool-use emerged, only +0.6; the 10M-step Stage 6 runs +30 to +39** (sampling std ~1e13: every rollout action was random bang-bang). **The longer a run went, the more its policy was pure noise.** So "more compute didn't help, needs industrial scale" was contaminated: more steps meant more entropy runaway, not more learning. Fixes: clamp std in use to `[0.05, 1.0]` (later per-team floors), clamp the log-ratio before `exp`, finite-loss guard, entropy 0.02→0.005, clip env-applied actions to [-1,1]. Per-iteration `std` logging added so exploration health is always visible.
 
 ### The debugging ladder (each fix removed exactly one blocker; honest eval = 200 deterministic eps, no assists)
 1. **NaN/std runaway** → fixed (above).
@@ -399,11 +408,11 @@ Run 1 (30M) NaN'd at 19.9M steps. Cause: the Gaussian entropy bonus puts a *cons
 7. **std/mean mismatch**: with actions clipped to [-1,1], std 2.7 made the mean policy (what eval runs) irrelevant → ceiling 1.0. This first pushed *all three rungs* nonzero in the honest eval simultaneously.
 8. **Reverse-chained curriculum**: hider-side assists (`ramp_locked`, `doorway_box` = sealed/placed/near, `hider_at_door`, `hider_on_ramp`) start episodes *in* or *one action from* a rung's payoff state, so the value function learns its worth and the policy learns to cause it.
 9. **Capacity**: legacy 128-MLP warm-chain plateaued at +0.42 over 48M steps; a fresh 256-wide hider hit +0.86 vs the same frozen seeker in 3.5M → capacity/interference + evade-prior was real. Nets widened to 256, arch inferred from checkpoints.
-10. **Precision** (per-team std floors: hider →0.05, seeker →0.25; lighter box) — did *not* help; the hider's std never annealed off the ceiling, meaning no construction gradient exists to sharpen.
-11. **Batch size** (the paper's biggest untried lever): rollout 2048→8192. Reduced gradient variance beautifully (training buckets went flat with tiny variance) but manufactured **no new signal** — clean confirmation the rung-1 plateau is a stable equilibrium, not noise.
+10. **Precision** (per-team std floors: hider →0.05, seeker →0.25; lighter box) did *not* help: the hider's std never annealed off the ceiling, meaning no construction gradient exists to sharpen.
+11. **Batch size** (the paper's biggest untried lever): rollout 2048→8192. Reduced gradient variance beautifully (training buckets went flat with tiny variance) but manufactured **no new signal**, a clean confirmation that the rung-1 plateau is a stable equilibrium, not noise.
 
 ### The breakthrough: 1v1 → 1v2 breaks the evasion equilibrium
-Every 1v1 run converged to pure evasion — a same-speed hider can always outrun one seeker, so construction never pays. The 40M fresh-256 1v1 co-evolution mega-run ended at **97.7% hidden, seeker ramp-use 1.3%** (no tools, either side). The paper had *multiple* seekers. Generalized the env to `n_hiders`/`n_seekers` (asymmetric teams, team LOS reward, obs 33) and ran **1 hider vs 2 seekers**, second seeker annealed in 4M–8M, fresh 256 both sides, 40M steps.
+Every 1v1 run converged to pure evasion: a same-speed hider can always outrun one seeker, so construction never pays. The 40M fresh-256 1v1 co-evolution mega-run ended at **97.7% hidden, seeker ramp-use 1.3%** (no tools, either side). The paper had *multiple* seekers. Generalized the env to `n_hiders`/`n_seekers` (asymmetric teams, team LOS reward, obs 33) and ran **1 hider vs 2 seekers**, second seeker annealed in 4M–8M, fresh 256 both sides, 40M steps.
 
 **This broke the equilibrium.** Two seekers pincer (camp the doorway + chase); evasion caps out and the seekers are pushed onto the ramp:
 
@@ -412,7 +421,7 @@ Every 1v1 run converged to pure evasion — a same-speed hider can always outrun
 | hider hidden-fraction | 97.7% | **56.2%** |
 | seeker ramp-use (elevated, play) | 1.3% | **9.1%** |
 
-The 1v2 training timeline is a clean co-evolutionary arms race — seeker ramp-use climbs and drives hider evasion from winning to losing:
+The 1v2 training timeline is a clean co-evolutionary arms race: seeker ramp-use climbs and drives hider evasion from winning to losing:
 
 | env steps | hider return | seeker ramp-use |
 |-----------|-------------|-----------------|
@@ -432,10 +441,10 @@ The 1v2 training timeline is a clean co-evolutionary arms race — seeker ramp-u
 **Rung 2 is real and pressure-caused** (9.1% vs 4.1% single-seeker, same policy; and the training curve above shows it emerging from ~zero and driving the game). **Rung 3 is a weak but genuine pressure-elevated signal** (7.0% vs 4.5%). **Rung 1 is the holdout** at floor.
 
 ### Why rung 1 is a wall (and it's not the reward)
-The fortress incentive is proven: probing the trained duo, a *pre-sealed* doorway gives the hider 87.9% hidden vs 44.2% normal — barricading is worth +44pp and there is no dodge alternative. The failure is in *acquisition*: the behavioral funnel (100 clean eps) shows the hider approaches the box (~63%) but pushes it doorward on only 9–14% of episodes and completes+locks a barricade ~2%. Pushing a 44px box into a ~20px doorway gap during a 144-step prep is a precise multi-step motor sequence that is essentially never randomly sampled, so PPO gets ~zero gradient toward it — the hider's std never anneals off its ceiling. This is the classic hard-exploration signature, and bigger batches (variance reduction) provably don't fix a signal that isn't there. It's exactly the regime the paper cleared with 100M+ steps **and LSTM memory** — the two ingredients not yet replicated here.
+The fortress incentive is proven: probing the trained duo, a *pre-sealed* doorway gives the hider 87.9% hidden vs 44.2% normal, so barricading is worth +44pp and there is no dodge alternative. The failure is in *acquisition*: the behavioral funnel (100 clean eps) shows the hider approaches the box (~63%) but pushes it doorward on only 9–14% of episodes and completes+locks a barricade ~2%. Pushing a 44px box into a ~20px doorway gap during a 144-step prep is a precise multi-step motor sequence that is essentially never randomly sampled, so PPO gets ~zero gradient toward it, and the hider's std never anneals off its ceiling. This is the classic hard-exploration signature, and bigger batches (variance reduction) provably don't fix a signal that isn't there. It's exactly the regime the paper cleared with 100M+ steps **and LSTM memory**, the two ingredients not yet replicated here.
 
-### Verdict: emergence is not one wall, it's a ladder of them — and multi-agent pressure is the load-bearing rung
-Stage 7 falsified the blunt Stages 5–6 conclusion in two ways. First, the "compute wall" was partly a *bug* (entropy-driven noise), not a fundamental limit. Second, and more important: **the missing ingredient for tool-use emergence at this scale was not raw compute — it was adversarial pressure that makes the tool the only option.** One seeker is dodgeable and nothing emerges at any compute budget; two seekers make evasion unwinnable and seeker ramp-use emerges cleanly from scratch, with a legible arms-race curve. Where it still stops is *precise construction under sparse reward* (rung 1) — a genuine sample-complexity/exploration wall, now characterized from every angle (incentive present, gradient absent, batch-invariant), whose known remedies are demonstrations/behavioral-cloning or LSTM+far-longer training. That is a sharper and more honest map than "needs industrial compute": **emergence needs the right *pressure* first, and only then does the last rung need industrial *exploration*.**
+### Emergence is not one wall but a ladder of them, and multi-agent pressure is the load-bearing rung
+Stage 7 falsified the blunt Stages 5–6 conclusion in two ways. First, the "compute wall" was partly a *bug* (entropy-driven noise), not a fundamental limit. Second, and more important: **the missing ingredient for tool-use emergence at this scale was not raw compute; it was adversarial pressure that makes the tool the only option.** One seeker is dodgeable and nothing emerges at any compute budget; two seekers make evasion unwinnable and seeker ramp-use emerges cleanly from scratch, with a legible arms-race curve. Where it still stops is *precise construction under sparse reward* (rung 1): a genuine sample-complexity/exploration wall, now characterized from every angle (incentive present, gradient absent, batch-invariant), whose known remedies are demonstrations/behavioral-cloning or LSTM+far-longer training. That is a sharper and more honest map than "needs industrial compute": **emergence needs the right *pressure* first, and only then does the last rung need industrial *exploration*.**
 
 ### Stage 7 status / artifacts
 - Env: `env_hs.py` gains `ramp`, `lock_mode`, `n_hiders`/`n_seekers`, `box_mass`, elevation-aware LOS, and the ramp/doorway spawn-assist reset options (all trainer-only; evals never pass them). Renderer draws the ramp (green wedge).
@@ -447,10 +456,10 @@ Stage 7 falsified the blunt Stages 5–6 conclusion in two ways. First, the "com
 
 ## 2026-07-18 — Stage 7 addendum: LSTM (the paper's architecture) + vectorization
 
-Two follow-ups after the feed-forward wall: (1) test the one paper ingredient not yet replicated — memory; (2) make training fast enough to iterate.
+Two follow-ups after the feed-forward wall: (1) test the one paper ingredient not yet replicated, memory; (2) make training fast enough to iterate.
 
-### Recurrent PPO — memory strengthens the emerged rung, doesn't crack the wall
-Built `ppo_recurrent.py` (LSTM ActorCritic; per-episode zero-hidden sequences; PPO update batched over whole episodes via packed sequences) and a 1v2 recurrent trainer. Hide-and-seek is partially observed (objects/opponents leave line-of-sight and their obs slots zero) and the barricade pays off many steps after it's built — exactly the credit-assignment memory should help.
+### Recurrent PPO: memory strengthens the emerged rung, doesn't crack the wall
+Built `ppo_recurrent.py` (LSTM ActorCritic; per-episode zero-hidden sequences; PPO update batched over whole episodes via packed sequences) and a 1v2 recurrent trainer. Hide-and-seek is partially observed (objects/opponents leave line-of-sight and their obs slots zero) and the barricade pays off many steps after it's built: exactly the credit-assignment memory should help.
 
 Result at 20M steps (honest eval, 200/150 eps, no assists):
 
@@ -460,19 +469,19 @@ Result at 20M steps (honest eval, 200/150 eps, no assists):
 | 3 | ramp hider-locked | 7.0% | 0.7% |
 | 1 | doorway barricaded | 5.5% | **0.0%** |
 
-Memory nearly **doubled** rung 2 (seeker ramp transport — a multi-step, memory-friendly skill), and its training curve climbs cleanly (elev 0.13 → 0.25 over the run). But **rung 1 construction stayed at 0.0%**, with training `barr` flat at ~0.18 the whole run (below the ~0.20 assist floor — the hider doesn't even reliably convert the assisted starts). So the paper's own architecture, tested directly, **confirms rather than overturns** the finding: recurrence amplifies the tool-use that pressure already induces, and leaves precise construction untouched. That rules out architecture as the rung-1 blocker and points the remaining finger squarely at **scale** (the paper's 100M+ steps).
+Memory nearly **doubled** rung 2 (getting to and holding the ramp, a multi-step, memory-friendly skill), and its training curve climbs cleanly (elev 0.13 → 0.25 over the run). But **rung 1 construction stayed at 0.0%**, with training `barr` flat at ~0.18 the whole run (below the ~0.20 assist floor, so the hider doesn't even reliably convert the assisted starts). So the paper's own architecture, tested directly, **confirms rather than overturns** the finding: recurrence amplifies the tool-use that pressure already induces, and leaves precise construction untouched. That rules out architecture as the rung-1 blocker and points the remaining finger squarely at **scale** (the paper's 100M+ steps).
 
-### Vectorization — 4× faster, and a correction to the earlier "GPU" intuition
-Profiling the recurrent loop showed the bottleneck is NOT the physics (pymunk runs ~17k steps/s) but the per-step LSTM forward at batch-1 (~84% of rollout wall-clock). A GPU is useless there (batch-1, tiny nets). The fix is batching: `train_hs7_lstm_vec.py` runs N=10 env copies in one process with a single batched policy forward per step (`act_batch`), and the update batches episodes via packed sequences (`eval_batch`, numerically identical to the per-episode path, err 5e-7). Benchmarked **201 → 881 steps/s (4×)**: the 20M verdict in ~6h instead of ~15, full 40M in ~13h instead of ~43. One simplification for batching: all N envs share one frozen opponent per rollout (diversity per-rollout, still covered by the pool). Checkpoints `hs_lstm20m_*.pt`.
+### Vectorization: 4× faster, and a correction to the earlier "GPU" intuition
+Profiling the recurrent loop showed the bottleneck is *not* the physics (pymunk runs ~17k steps/s) but the per-step LSTM forward at batch-1 (~84% of rollout wall-clock). A GPU is useless there (batch-1, tiny nets). The fix is batching: `train_hs7_lstm_vec.py` runs N=10 env copies in one process with a single batched policy forward per step (`act_batch`), and the update batches episodes via packed sequences (`eval_batch`, numerically identical to the per-episode path, err 5e-7). Benchmarked **201 → 881 steps/s (4×)**: the 20M verdict in ~6h instead of ~15, full 40M in ~13h instead of ~43. One simplification for batching: all N envs share one frozen opponent per rollout (diversity per-rollout, still covered by the pool). Checkpoints `hs_lstm20m_*.pt`.
 
 ### Stage 7 final status
-The arc, honestly: **rung 2 emerged (strongly, and more so with memory); rung 3 weak; rung 1 is a scale wall.** The load-bearing ingredient for emergence at desktop scale is multi-agent pressure, not compute — and the one rung that still needs industrial compute is precise construction, now confirmed to survive curriculum, capacity, batch size, AND recurrence. Artifact: "Pressure, Not Compute." Policies: `hs_lstm20m_*` (best rung-2), `hs_ramp_*_final` (feed-forward 1v2), `hs_mega1v1_*` (evasion baseline).
+The arc, honestly: **rung 2 emerged (strongly, and more so with memory); rung 3 weak; rung 1 is a scale wall.** The load-bearing ingredient for emergence at desktop scale is multi-agent pressure, not compute. The one rung that still needs industrial compute is precise construction, now confirmed to survive curriculum, capacity, batch size, and recurrence. Policies: `hs_lstm20m_*` (best rung-2), `hs_ramp_*_final` (feed-forward 1v2), `hs_mega1v1_*` (evasion baseline).
 
 ---
 
-## 2026-07-20 — Stage 7 addendum: the scale test (the last untried lever) — 120M steps
+## 2026-07-20 — Stage 7 addendum: the scale test (the last untried lever), 120M steps
 
-The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly one paper ingredient untested: **raw scale** (the paper trained 100M+ steps). Vectorization made this affordable, so we ran it definitively: warm-start both nets from `hs_lstm20m_*` and train **100M more vectorized steps** (`train_hs7_lstm_vec.py 100000000 0 0 --load=hs_lstm20m --envs=10 --steps=800 --hidden=256`), for **~120M total** — the paper's own regime. ~34h wall-clock at ~900–1000 steps/s. Honest evals (200 deterministic eps, no assists) at four checkpoints:
+The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly one paper ingredient untested: **raw scale** (the paper trained 100M+ steps). Vectorization made this affordable, so we ran it definitively: warm-start both nets from `hs_lstm20m_*` and train **100M more vectorized steps** (`train_hs7_lstm_vec.py 100000000 0 0 --load=hs_lstm20m --envs=10 --steps=800 --hidden=256`), for **~120M total**, the paper's own regime. ~34h wall-clock at ~900–1000 steps/s. Honest evals (200 deterministic eps, no assists) at four checkpoints:
 
 | total steps | rung 1 barricade | rung 2 elev (both / single) | rung 3 lock | hidden |
 |-------------|------------------|-----------------------------|-------------|--------|
@@ -482,20 +491,20 @@ The 20M LSTM run ruled out *architecture* as the rung-1 blocker and left exactly
 | 120M (save-best) | **0.0%** | 12.7% / 9.0% | 1.0% | 84.7% |
 | 120M (final wts) | **0.0%** | 14.7% / 5.8% | 0.0% | 80.6% |
 
-**Verdict: scale is ruled out too. Rung 1 construction is 0.0% at every checkpoint from 34M through 120M** — not a slow climb, a hard floor. The last lever is exhausted; the exploration wall around precise box-into-doorway construction survives curriculum, capacity, batch size, recurrence, *and* paper-regime scale. In this 2D reproduction, the honest conclusion is that rung 1 needs a *different* ingredient than more of the same — demonstrations / behavioral cloning to seed the motor sequence — not just a bigger budget.
+**Verdict: scale is ruled out too. Rung 1 construction is 0.0% at every checkpoint from 34M through 120M.** Not a slow climb, a hard floor. The last lever is exhausted; the exploration wall around precise box-into-doorway construction survives curriculum, capacity, batch size, recurrence, *and* paper-regime scale. In this 2D reproduction, the conclusion is that rung 1 needs a *different* ingredient than more of the same (demonstrations / behavioral cloning to seed the motor sequence), not just a bigger budget.
 
 **Two things the scale run clarified about rung 2:**
-- It stays **provably pressure-caused** — both-seeker elevation exceeds the single-seeker control at *every* checkpoint (25.0 vs 12.2 at 80M; 12.7 vs 9.0 at 120M). That gap is the robust result.
-- Its *absolute* level is **non-stationary**, not monotone. It peaked ~25% around 80M, then fell back to ~13% by 120M as the **hider** swung ahead in the arms race (hidden-fraction rose 74%→85%, so the seeker needed the ramp less often). This is ordinary non-transitive self-play dynamics — the emerged tool-use oscillates in amplitude while the *causal* pressure signature persists. Reporting the save-best snapshot's peak alone would overstate a fixed equilibrium that isn't there.
+- It stays **provably pressure-caused**: both-seeker elevation exceeds the single-seeker control at *every* checkpoint (25.0 vs 12.2 at 80M; 12.7 vs 9.0 at 120M). That gap is the robust result.
+- Its *absolute* level is **non-stationary**, not monotone. It peaked ~25% around 80M, then fell back to ~13% by 120M as the **hider** swung ahead in the arms race (hidden-fraction rose 74%→85%, so the seeker needed the ramp less often). This is ordinary non-transitive self-play dynamics: the emerged tool-use oscillates in amplitude while the *causal* pressure signature persists. Reporting the save-best snapshot's peak alone would overstate a fixed equilibrium that isn't there.
 
 ### 2026-07-27 — the full arc co-emerges (2v2): necessity, not compute, all the way up
 
-After rung 1 was cracked (roomt) the question became whether the *whole* three-rung chain could co-emerge in ONE environment. It could not with one hider: the arc's rung 3 (hider locks the ramp away) is a *division of labor* — one hider must barricade while another denies the ramp — and a single agent cannot be in two places. A rung-3 curriculum proved this cleanly: it drove ramp-locking to 0.20 in assisted training but **0.0% in honest eval** (taught but structurally undeployable by one hider).
+After rung 1 was cracked (roomt) the question became whether the *whole* three-rung chain could co-emerge in *one* environment. It could not with one hider: the arc's rung 3 (hider locks the ramp away) is a *division of labor* (one hider must barricade while another denies the ramp) and a single agent cannot be in two places. A rung-3 curriculum proved this cleanly: it drove ramp-locking to 0.20 in assisted training but **0.0% in honest eval** (taught but structurally undeployable by one hider).
 
 The unified-arc runs built up the environment that makes all three rungs necessary at once:
 - **roomt** (tight room) so plain evasion fails → rung 1 necessary;
 - **1.4× seeker speed** so a same-speed hider can't outrun the seekers (env `seeker_speed_mult`);
-- a **seeker curriculum** (episodes start with the door pre-sealed → the seeker must ramp over the wall) so rung 2 is necessary once rung 1 happens;
+- a **seeker curriculum** (episodes start with the door pre-sealed → the seeker must use the ramp to see in) so rung 2 is necessary once rung 1 happens;
 - per-layout **ramp bands** so an elevated seeker can actually see into the small room (`ELEV_RANGE` geometry);
 - **two hiders** (`n_hiders=2, n_seekers=2`) + a **split-role curriculum** (`split_roles`: hider 0 → door, hider 1 → ramp) so the division of labor is scaffolded.
 
@@ -503,28 +512,28 @@ The unified-arc runs built up the environment that makes all three rungs necessa
 | rung | save-best | final |
 |------|-----------|-------|
 | 1 — hider barricades doorway | **23.5%** | 16.5% |
-| 2 — seeker ramps over wall | 7.9% | **8.8%** |
+| 2 — seeker holds the ramp to see in | 7.9% | **8.8%** |
 | 3 — hider locks ramp away | **1.5%** | **2.0%** |
 
-All three rungs nonzero and stable across checkpoints; counterfactual (hider disabled) 57% = the lowest of the project (evasion genuinely failing). rung 3 survives the curriculum fade at ~2% — where it was a hard 0.0% with one hider — confirming the division of labor is the operative mechanism. Non-stationary in amplitude (the arms race oscillates: hider-hidden swung 0.35→0.82→0.61 over the honest phase), so read the *presence* of all three rungs, not a fixed equilibrium.
+All three rungs nonzero and stable across checkpoints; counterfactual (hider disabled) 57% = the lowest of the project (evasion genuinely failing). rung 3 survives the curriculum fade at ~2%, where it was a hard 0.0% with one hider, confirming the division of labor is the operative mechanism. Non-stationary in amplitude (the arms race oscillates: hider-hidden swung 0.35→0.82→0.61 over the honest phase), so read the *presence* of all three rungs, not a fixed equilibrium.
 
-**Honest framing (important):** this is co-emergence under *engineered necessity + annealed curricula*, NOT the paper's pure-scale from-scratch emergence. The curricula fade to zero so the eval is legitimately assist-free, but the room, the speed asymmetry, and the skill scaffolds were designed. Stated precisely, the contribution is the **mechanism**, demonstrated in both directions: a tool emerges iff the environment makes it necessary — rung 1 was flat 0.0% through 120M steps of pure scale and appeared at 22% the moment evasion was made to fail; each rung can be switched on and off by what the environment rewards; the full chain needs the pressure AND the multi-agent structure (two hiders) that the necessity implies. Emergence at desktop scale is gated by necessity, not compute.
+**Honest framing (important):** this is co-emergence under *engineered necessity + annealed curricula*, *not* the paper's pure-scale from-scratch emergence. The curricula fade to zero so the eval is legitimately assist-free, but the room, the speed asymmetry, and the skill scaffolds were designed. Stated precisely, the contribution is the **mechanism**, demonstrated in both directions: a tool emerges iff the environment makes it necessary. Rung 1 was flat 0.0% through 120M steps of pure scale and appeared at 22% the moment evasion was made to fail; each rung can be switched on and off by what the environment rewards; the full chain needs the pressure *and* the multi-agent structure (two hiders) that the necessity implies. Emergence at desktop scale is gated by necessity, not compute.
 
 Policies `hs_2v2_{hider,seeker}.pt`/`_final`; trainer `train_hs7_arc2v2.py`; env gains `seeker_speed_mult`, per-layout `_ramp_bands`, and `split_roles`; log `train_hs7_2v2.log`. Prior arc lineage: `train_hs7_arc.py` (1v2, `--layout`/`--speed`/`--save`/`--load-{hider,seeker}`; seeker + rung-3 curricula), `hs_arcv3_*` (rung1+rung2 co-emerge), `hs_arc4_*` (rung-3 curriculum, 1-hider limit).
 
 ### Stage 7 closed (for scale)
-Every lever tried: entropy-runaway fix, doorway geometry, elevation assist, elevation range, live opponent ladder, level-locks, action ceiling, reverse-chained curriculum, 256 capacity, per-team std floors, 8192 batch, forgiving 72px door-box, LSTM memory, and 120M-step scale. **Result stands unchanged and is now maximally supported: multi-agent pressure — not compute — is what makes tool-use emerge at desktop scale (rung 2, robustly; rung 3 weakly); precise construction under sparse reward (rung 1) is a genuine exploration wall that scale does not close.** Scale-run log `train_hs7_lstm.log`; final policies `hs_lstm_{hider,seeker}_final.pt` (120M) and save-best `hs_lstm_{hider,seeker}.pt`.
+Every lever tried: entropy-runaway fix, doorway geometry, elevation assist, elevation range, live opponent ladder, level-locks, action ceiling, reverse-chained curriculum, 256 capacity, per-team std floors, 8192 batch, forgiving 72px door-box, LSTM memory, and 120M-step scale. **Result stands unchanged and is now maximally supported: multi-agent pressure, not compute, is what makes tool-use emerge at desktop scale (rung 2, robustly; rung 3 weakly); precise construction under sparse reward (rung 1) is a genuine exploration wall that scale does not close.** Scale-run log `train_hs7_lstm.log`; final policies `hs_lstm_{hider,seeker}_final.pt` (120M) and save-best `hs_lstm_{hider,seeker}.pt`.
 
 ---
 
-## 2026-07-22 — Stage 7 addendum: RUNG 1 CRACKED — the environment must make the tool NECESSARY
+## 2026-07-22 — Stage 7 addendum: rung 1 cracked, the environment must make the tool necessary
 
-After scale was ruled out, three reverse-curriculum runs isolated the rung-1 wall precisely: the barricade is a two-atom skill — (1) lock-press-and-hold, (2) push-then-lock ordering. A 3-phase reverse curriculum (`train_hs7_lstm_vec_rc.py`, v2) made **lock-press emerge and hold** (Phase-B `barr`~0.6 for 9M steps — the atom no prior run reached). But **push-then-lock stayed at 0.0%**: handed a box a few px out of the doorway, the hider locks it *in place* (a premature-commitment local optimum) instead of pushing to seal. A geometric fix (v3, `_rc3`: spawn the hider above the box beyond lock-reach so descending-to-seal IS the push) also collapsed to 0.0% at the same point.
+After scale was ruled out, three reverse-curriculum runs isolated the rung-1 wall precisely: the barricade is a two-atom skill, (1) lock-press-and-hold, (2) push-then-lock ordering. A 3-phase reverse curriculum (`train_hs7_lstm_vec_rc.py`, v2) made **lock-press emerge and hold** (Phase-B `barr`~0.6 for 9M steps, the atom no prior run reached). But **push-then-lock stayed at 0.0%**: handed a box a few px out of the doorway, the hider locks it *in place* (a premature-commitment local optimum) instead of pushing to seal. A geometric fix (v3, `_rc3`: spawn the hider above the box beyond lock-reach so descending-to-seal IS the push) also collapsed to 0.0% at the same point.
 
-**The root cause was not learnability — it was necessity.** Every honest eval's counterfactual (hider disabled) showed **78–82% hidden from room geometry alone**: plain evasion already wins, so the barricade is a *luxury* and there is no reward pressure toward the last, hardest rung. That is exactly why rung 1 never emerges under any curriculum/architecture/compute — the same logic as why rung 2 needed a *second seeker* to make evasion unwinnable. Every prior fix tried to make the push *learnable*; the real problem was that the environment never made it *necessary*.
+**The root cause was not learnability but necessity.** Every honest eval's counterfactual (hider disabled) showed **78–82% hidden from room geometry alone**: plain evasion already wins, so the barricade is a *luxury* and there is no reward pressure toward the last, hardest rung. That is exactly why rung 1 never emerges under any curriculum/architecture/compute, the same logic as why rung 2 needed a *second seeker* to make evasion unwinnable. Every prior fix tried to make the push *learnable*; the real problem was that the environment never made it *necessary*.
 
-### The fix: `roomt` — a room where you can't just hide
-New layout (fully parameterized; `room`/`open` byte-identical, hashes unchanged): a **tight** corner room (walls at x/y=160 vs 240, interior ~150px) with a 60px doorway, and **seekers spawning close** to the doorway instead of across the arena. Small enough that a seeker which reaches the doorway sees the whole interior and the hider can't juke it in open space. Same obs=33 / 1 door-box+1 spare / ramp as `room`, so policies warm-start across. Trained with the v3 push-curriculum (annealed to zero — honest eval is assist-free), warm-started from the 120M base (`train_hs7_roomt.py`, `--layout=roomt`, 50M steps, `hs_roomt_*`).
+### The fix: `roomt`, a room where you can't just hide
+New layout (fully parameterized; `room`/`open` byte-identical, hashes unchanged): a **tight** corner room (walls at x/y=160 vs 240, interior ~150px) with a 60px doorway, and **seekers spawning close** to the doorway instead of across the arena. Small enough that a seeker which reaches the doorway sees the whole interior and the hider can't juke it in open space. Same obs=33 / 1 door-box+1 spare / ramp as `room`, so policies warm-start across. Trained with the v3 push-curriculum (annealed to zero, so the honest eval is assist-free), warm-started from the 120M base (`train_hs7_roomt.py`, `--layout=roomt`, 50M steps, `hs_roomt_*`).
 
 ### Result: rung 1 EMERGED and held (honest eval, no assists, 200 eps)
 | steps | rung 1 barricade | hidden-frac | note |
@@ -534,7 +543,31 @@ New layout (fully parameterized; `room`/`open` byte-identical, hashes unchanged)
 | 50M (save-best) | **21.5%** | 78.2% | stable |
 | 50M (final) | **20.5%** | 78.9% | stable |
 
-The hider now does genuine multi-step construction unassisted — pushes box 0 from its spawn into the doorway seal-zone and locks it — **~20–25% of episodes, stable across the run**. This is the skill that was 0.0% across 120M-step scale, LSTM, and every room curriculum. **Making the tool necessary is what made it emerge**, precisely mirroring the rung-2 finding. (Non-stationary in amplitude like rung 2 — the seeker/hider arms race oscillates, seeker coverage `hid` swinging 0.75→0.54→0.73 over the honest phase — but rung-1 construction stays robustly nonzero throughout.)
+The hider now does genuine multi-step construction unassisted: pushes box 0 from its spawn into the doorway seal-zone and locks it, **~20–25% of episodes, stable across the run**. This is the skill that was 0.0% across 120M-step scale, LSTM, and every room curriculum. **Making the tool necessary is what made it emerge**, precisely mirroring the rung-2 finding. (Non-stationary in amplitude like rung 2: the seeker/hider arms race oscillates, seeker coverage `hid` swinging 0.75→0.54→0.73 over the honest phase, but rung-1 construction stays robustly nonzero throughout.)
 
-### The unifying result — and the honest limit on "the full arc"
-Each rung emerges **iff the environment makes that specific tool necessary**: the big `room` (dodgeable single seeker → 2 seekers) yields **rung 2** (seeker ramp-use) but not rung 1; the tight `roomt` (evasion fails) yields **rung 1** (hider barricade) but not rung 2 (close seekers don't need the ramp — elev drops to ~4%). No single tuning made all three necessary at once, so the paper's full three-rung *chain* does not co-emerge in one env at this scale. But the deeper claim is now proven in **both directions**: **emergence of a tool is gated by environmental necessity, not by compute** — construction (rung 1) was never a compute wall, it was a necessity gap, and closing that gap made it emerge. Policies `hs_roomt_{hider,seeker}.pt` / `_final`; log `train_hs7_roomt.log`; trainers `train_hs7_lstm_vec_rc.py` (v2) / `_rc3.py` (v3, push-fix) / `train_hs7_roomt.py` (roomt).
+### The unifying result, and the honest limit on "the full arc"
+Each rung emerges **iff the environment makes that specific tool necessary**: the big `room` (dodgeable single seeker → 2 seekers) yields **rung 2** (seeker ramp-use) but not rung 1; the tight `roomt` (evasion fails) yields **rung 1** (hider barricade) but not rung 2 (close seekers don't need the ramp; elev drops to ~4%). No single tuning made all three necessary at once, so the paper's full three-rung *chain* does not co-emerge in one env at this scale. But the deeper claim is now proven in **both directions**: **emergence of a tool is gated by environmental necessity, not by compute**. Construction (rung 1) was never a compute wall, it was a necessity gap, and closing that gap made it emerge. Policies `hs_roomt_{hider,seeker}.pt` / `_final`; log `train_hs7_roomt.log`; trainers `train_hs7_lstm_vec_rc.py` (v2) / `_rc3.py` (v3, push-fix) / `train_hs7_roomt.py` (roomt).
+
+---
+
+## 2026-07-28 — correction: rung 2 is not ramp transport, and the ramp never moves
+
+Went to cut a demo GIF of rung 2 and couldn't find an episode that looked like the claim. Measured it properly instead. Two things were wrong, one of them mine for not checking sooner.
+
+**The metric was a proxy, and a slightly loose one.** `seeker_elevated` is set by `_compute_elevated()` purely on proximity: any agent within `RAMP_USE_DIST` (55px) of the ramp. It says nothing about whether the elevation revealed anything. The strict version — seeker sees a hider now, and would *not* see it un-elevated, so the ramp is what bought the sightline — is lower but holds up:
+
+| run | reported (near ramp) | strict (ramp bought the sightline) | conversion |
+|-----|---------------------|-----------------------------------|------------|
+| `hs_lstm` 120M, room 1v2 | 12.3% | 9.0% | 74% |
+| `hs_lstm20m` 20M, room 1v2 | 20.0% | 17.0% | 85% |
+| `hs_2v2` 50M, roomt 2v2 | 9.9% | 8.3% | 85% |
+
+So rung 2 survives: 74–85% of "elevated" steps are genuine see-over-wall use, and the single-seeker control gap is unaffected. The emergence claim stands, the numbers are ~3pp lower than reported.
+
+**The narrative was just wrong.** Across those same runs the ramp moves **1–5px per episode**. It is never transported. The seeker walks *to* the ramp and stands on it; the ramp does not come to the room. Both layouts spawn it inside `ELEV_RANGE` already (`room` 240–480, `roomt` explicitly commented `# kept <400px of the small room`, and it ends ~166px from the doorway), so transport buys nothing and never had a gradient. Every "transports / fetches / ramps over the wall" phrasing above is corrected.
+
+Worth being precise about what the mechanic even is: elevation *only* rewrites the LOS mask. `_elevated_now` is read in exactly three places — the raycast mask, the obs flag, the info dict — and none of them touch physics. There is no climbing and no traversal; the doorway stays the only way into the room. There is also no catching anywhere in `env_hs.py` since 5b: the game is pure visibility over a fixed horizon.
+
+**Where this leaves the thesis.** It sharpens it rather than dents it. Ramp *transport* is not a rung that failed to emerge — it is a rung that was never made necessary, because the ramp spawns pre-positioned. Same for climbing, which isn't implemented at all. By the project's own finding (a tool emerges iff the environment makes it necessary), both are untested rather than refuted, and both are now testable: `env_hs.py` gains `ramp_climb` (elevation also drops `LOW_CAT` from the *collision* mask, so a seeker can cross interior walls), `ramp_xray` (whether elevation still grants see-through sight, default True = shipped behavior), `climb_teams` (seeker-only by default: a climbing hider would make a sealed room pointless and gut rung 1), and `ramp_bands` (spawn the ramp out of range so fetching it is required). All default to the old behavior, trajectory-hash regression-checked byte-identical on room 1v2, roomt 2v2, open 1v1 and room 1v1.
+
+`gif_hs.py` now scores `--want=elev` on the strict definition and can draw the sightline (`--sightline`), so the montage shows the mechanism instead of a seeker loitering near a wedge.
