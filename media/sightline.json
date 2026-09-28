@@ -1,0 +1,48 @@
+{
+  "preset": "room",
+  "seed": 136,
+  "selected_example": true,
+  "selection_note": "Illustrative episode; use the 200-episode reports for frequencies.",
+  "environment": {
+    "layout": "room",
+    "n_hiders": 1,
+    "n_seekers": 2,
+    "seeker_speed_mult": 1.0,
+    "ramp": true,
+    "max_steps": 360,
+    "lock_mode": "level",
+    "box_mass": 2,
+    "door_box_size": 72,
+    "ramp_climb": false,
+    "ramp_xray": true
+  },
+  "checkpoints": {
+    "hider": {
+      "file": "checkpoints/hs_lstm_hider.pt",
+      "sha256": "cac324ae0e42785e63a85a5a4d32f53c41a63d8a503516a1b929c0a3268cfed6"
+    },
+    "seeker": {
+      "file": "checkpoints/hs_lstm_seeker.pt",
+      "sha256": "a97acaaebc44f77d955ef23e156efdaa0af9a7e0e6196ab5e7d7f255e2215f6c"
+    }
+  },
+  "metrics": {
+    "seed": 136,
+    "play_steps": 216,
+    "hidden_fraction": 0.12962962962962962,
+    "barricade_at_end": false,
+    "near_ramp_fraction": 0.8703703703703703,
+    "ramp_sightline_fraction": 0.8703703703703703,
+    "ramp_locked_at_end": false,
+    "ramp_net_displacement_px": 1.2928124896093631,
+    "ramp_max_displacement_px": 1.2928124896093631
+  },
+  "source_sha256": {
+    "demo.py": "c8c59cd6d176d14adf4c8c347c57251e52ebee5cf97dbf4141adf60f791e7f56",
+    "evaluate.py": "aefae6572e7fa0f816b682e5e9cfcabb2e0ba1c70317f2595029b43a7c960808",
+    "hide_and_seek/env_hs.py": "738c2994b92631ab4fa962c3b89a32ac51a1d0a59e30dba12b9bd97e81b6ad67",
+    "hide_and_seek/renderer.py": "06385637e9147c3264da6a29ba4ef0437c5074832676419057cbd764eadaf98d"
+  },
+  "frames": 120,
+  "duration_ms_per_frame": 50
+}
