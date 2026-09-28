@@ -10,6 +10,8 @@ dependencies = [
     "pymunk>=7.0",
     "pygame>=2.5",
     "pettingzoo>=1.24",
+    "pillow>=12.3.0",
+    "nbformat>=5.10.4",
 ]
 
 [project.optional-dependencies]
@@ -17,13 +19,17 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.4",
 ]
+notebook = [
+    "ipykernel>=7.3.0",
+    "nbclient>=0.11.0",
+]
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = []
+packages = ["hide_and_seek"]
 
 [tool.ruff]
 line-length = 100

@@ -3,7 +3,7 @@ Watch random policies play tag. Useful for eyeballing that the env looks right
 before we start training. Quit by closing the window.
 """
 
-from env import TagEnv
+from hide_and_seek.env import TagEnv
 
 env = TagEnv(render_mode="human")
 obs, _ = env.reset(seed=0)

@@ -19,8 +19,8 @@ import random
 import numpy as np
 import torch
 
-from env import TagEnv
-from ppo_continuous import PPO, ActorCritic
+from hide_and_seek.env import TagEnv
+from hide_and_seek.ppo_continuous import PPO, ActorCritic
 
 
 # ---- config ----

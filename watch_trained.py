@@ -8,8 +8,8 @@ Uses the mean of each policy's distribution instead of sampling, so behavior is 
 
 import torch
 
-from env import TagEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env import TagEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 
 env = TagEnv(render_mode="human")

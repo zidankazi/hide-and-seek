@@ -14,8 +14,8 @@ import sys
 import numpy as np
 import torch
 
-from env_hs import HideAndSeekEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 digits = [a for a in sys.argv[1:] if a.isdigit()]
 N = int(digits[0]) if digits else 200

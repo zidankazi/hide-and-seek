@@ -9,8 +9,8 @@ import sys
 import numpy as np
 import torch
 
-from env_hs import HideAndSeekEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 SUFFIX = "" if "--best" in sys.argv else "_final"
 

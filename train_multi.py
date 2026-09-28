@@ -11,8 +11,8 @@ networks after each rollout, and save each one to its own file.
 import numpy as np
 import torch
 
-from env import TagEnv
-from ppo_continuous import PPO
+from hide_and_seek.env import TagEnv
+from hide_and_seek.ppo_continuous import PPO
 
 
 env = TagEnv()

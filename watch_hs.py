@@ -8,7 +8,7 @@ shoved around (a purely random hider barely touches them). Seeker acts randomly.
 
 import numpy as np
 
-from env_hs import HideAndSeekEnv
+from hide_and_seek.env_hs import HideAndSeekEnv
 
 env = HideAndSeekEnv(render_mode="human")
 obs, _ = env.reset(seed=0)

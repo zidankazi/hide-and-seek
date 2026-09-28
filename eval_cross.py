@@ -6,8 +6,8 @@ import sys
 import numpy as np
 import torch
 
-from env import TagEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env import TagEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 hider_dir = sys.argv[1]
 seeker_dir = sys.argv[2]

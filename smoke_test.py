@@ -8,7 +8,7 @@ episodes and prints what happened. We're not training, just checking that:
 """
 
 import numpy as np
-from env import TagEnv
+from hide_and_seek.env import TagEnv
 
 env = TagEnv()
 n_episodes = 20

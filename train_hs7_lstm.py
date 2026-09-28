@@ -21,8 +21,8 @@ import sys
 import numpy as np
 import torch
 
-from env_hs import HideAndSeekEnv
-from ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBuffer
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBuffer
 
 
 # ---- config ----

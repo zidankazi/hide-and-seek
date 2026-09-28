@@ -7,8 +7,8 @@ import sys
 import numpy as np
 import torch
 
-from env import TagEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env import TagEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 load_dir = sys.argv[1] if len(sys.argv) > 1 else "."
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 200

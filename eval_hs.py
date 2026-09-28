@@ -12,8 +12,8 @@ import sys
 import numpy as np
 import torch
 
-from env_hs import HideAndSeekEnv
-from ppo_continuous import ActorCritic
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_continuous import ActorCritic
 
 # Usage: python eval_hs.py [layout=room|open] [N]
 LAYOUT = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].isdigit() else "room"

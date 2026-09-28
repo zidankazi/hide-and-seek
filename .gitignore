@@ -1,9 +1,12 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 wandb/
 runs/
-checkpoints/
+/checkpoints/*.pt
+.pytest_cache/
+.ruff_cache/
 *.mp4
 .DS_Store
 # local safety copies of overwritten policies

@@ -41,8 +41,8 @@ import sys
 import numpy as np
 import torch
 
-from env_hs import HideAndSeekEnv
-from ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBuffer
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_recurrent import RecurrentPPO, ActorCriticLSTM, EpisodeBuffer
 
 torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
 

@@ -79,7 +79,7 @@ class TagEnv(ParallelEnv):
         self.render_mode = render_mode
         self.renderer = None
         if render_mode == "human":
-            from renderer import GameRenderer
+            from hide_and_seek.renderer import GameRenderer
             self.renderer = GameRenderer(title="Tag")
         self.steps = 0
 

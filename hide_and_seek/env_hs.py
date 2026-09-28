@@ -86,7 +86,8 @@ class HideAndSeekEnv(ParallelEnv):
     def __init__(self, render_mode=None, layout="room", team_size=1, n_boxes=None,
                  ramp=False, max_steps=None, lock_mode="toggle",
                  n_hiders=None, n_seekers=None, box_mass=None, door_box_size=None,
-                 seeker_speed_mult=1.0):
+                 seeker_speed_mult=1.0, ramp_climb=False, ramp_xray=True, climb_steps=45,
+                 climb_teams=("seeker",), ramp_bands=None):
         """
         layout="room" (Stage 5b): corner room with a doorway, 2 boxes. The room hides the
             hider passively, so tool-use is optional.
@@ -163,6 +164,11 @@ class HideAndSeekEnv(ParallelEnv):
             self._room_walls = [list(w) for w in self.ROOM_WALLS]
             self._box0_spawn = ((150, 205), (140, 190))
             self._ramp_bands = ((240, 330), (240, 480))   # original bands (byte-identical)
+        # Both defaults sit inside ELEV_RANGE of the room, so the ramp is already useful where
+        # it spawns and transporting it buys nothing (measured: ~1px moved per episode). Pass
+        # ramp_bands to spawn it out of range and make fetching it necessary.
+        if ramp_bands is not None:
+            self._ramp_bands = tuple(tuple(b) for b in ramp_bands)
         if self.n_hiders == 1 and self.n_seekers == 1:
             self.possible_agents = ["hider", "seeker"]
         else:
@@ -254,6 +260,36 @@ class HideAndSeekEnv(ParallelEnv):
         self.ramp_lock_owner = None
         self.ramp_active = True     # curriculum knob; set per-episode via reset options
         self._elevated_now = set()  # agents currently within RAMP_USE_DIST of the ramp
+
+        # --- what being elevated actually buys you (two independent effects) ---
+        # ramp_xray  (default True, the original Stage 7 behavior): elevation rewrites the LOS
+        #   mask, so the agent SEES over LOW_CAT occluders within ELEV_RANGE.
+        # ramp_climb (default False): elevation also drops LOW_CAT from the agent's COLLISION
+        #   mask, so it can CROSS interior walls and boxes — the paper's climb-over.
+        # Sight alone is what shipped, and it is why the doorway stays the only way in and the
+        # ramp never needs moving (it spawns inside ELEV_RANGE; measured ~1px moved/episode).
+        # Splitting them lets a run make the ramp an entry tool rather than a surveillance one:
+        # ramp_xray=False, ramp_climb=True means the ramp buys nothing until you climb it.
+        self.ramp_xray = bool(ramp_xray)
+        self.ramp_climb = bool(ramp_climb)
+        self.climb_steps = int(climb_steps)      # elevation persists this long after leaving
+        self.climb_teams = tuple(climb_teams)    # which teams may climb ("seeker",) by default
+        self._climb_left = {n: 0 for n in self.possible_agents}
+        self._phased = set()                     # agents currently ignoring LOW_CAT collisions
+        self._climbed = set()                    # agents that entered the room over a wall
+        # Room interior box, derived from the wall segments rather than hardcoded, used to
+        # tell a genuine climb-in from a seeker merely brushing a wall while phased.
+        self._room_box = None
+        if self.layout in ("room", "roomt"):
+            _xs = [p[0] for w in self._room_walls for p in w]
+            _ys = [p[1] for w in self._room_walls for p in w]
+            self._room_box = (10.0, 10.0, float(max(_xs)), float(max(_ys)))
+        self._in_room_prev = {n: False for n in self.possible_agents}
+        self._prev_pos = {}                      # last-step centre, to classify room entries
+        self._solid_filter = pymunk.ShapeFilter(categories=self.AGENT_CAT)
+        self._phase_filter = pymunk.ShapeFilter(
+            categories=self.AGENT_CAT,
+            mask=pymunk.ShapeFilter.ALL_MASKS() & ~self.LOW_CAT)
         if self.ramp:
             self._ramp_moment = pymunk.moment_for_box(
                 self.RAMP_MASS, (self.RAMP_SIZE, self.RAMP_SIZE))
@@ -274,7 +310,7 @@ class HideAndSeekEnv(ParallelEnv):
         self.render_mode = render_mode
         self.renderer = None
         if render_mode == "human":
-            from renderer import GameRenderer
+            from hide_and_seek.renderer import GameRenderer
             self.renderer = GameRenderer(title="Hide & Seek")
         self.steps = 0
 
@@ -302,12 +338,14 @@ class HideAndSeekEnv(ParallelEnv):
 
         An ELEVATED observer (standing on the ramp) sees over LOW_CAT occluders — boxes and
         interior walls — but only within ELEV_RANGE; beyond that, normal rules. Arena-edge
-        walls block sight regardless.
+        walls block sight regardless. Elevation only grants this when ramp_xray is on (the
+        default); with it off the ramp is purely an entry tool and buys no extra sight.
         """
         start = self.bodies[agent].position
         end = target_body.position
         mask = self.OCCLUDER_CAT
-        if agent in self._elevated_now and (end - start).length <= self.ELEV_RANGE:
+        if (self.ramp_xray and agent in self._elevated_now
+                and (end - start).length <= self.ELEV_RANGE):
             mask = self.WALL_CAT
         hit = self.space.segment_query_first(start, end, 1, pymunk.ShapeFilter(mask=mask))
         if hit is None:
@@ -321,6 +359,82 @@ class HideAndSeekEnv(ParallelEnv):
         rp = self.ramp_body.position
         return {n for n in self.possible_agents
                 if (self.bodies[n].position - rp).length <= self.RAMP_USE_DIST}
+
+    def _in_room(self, name):
+        """Is this agent's centre inside the room interior? (False for layouts with no room.)"""
+        if not self._room_box:
+            return False
+        x0, y0, x1, y1 = self._room_box
+        p = self.bodies[name].position
+        return x0 < p.x < x1 and y0 < p.y < y1
+
+    def _overlaps_low(self, name):
+        """Is this agent currently inside an interior wall or box?"""
+        hits = self.space.point_query(tuple(self.bodies[name].position), self.AGENT_RADIUS,
+                                      pymunk.ShapeFilter(mask=self.LOW_CAT))
+        return len(hits) > 0
+
+    def _update_elevation(self):
+        """Refresh `_elevated_now`, and (if ramp_climb) who may pass through LOW_CAT.
+
+        With ramp_climb off this is exactly `_compute_elevated()` and nothing else happens,
+        so every pre-climb run reproduces byte-for-byte.
+
+        With it on, stepping onto the ramp opens a `climb_steps` window that keeps ticking
+        after the agent leaves it, giving a crossing time to finish — otherwise the agent
+        re-solidifies the instant it steps off the ramp and can never get through. The window
+        also can't expire while the agent is still inside a wall (it would be wedged in
+        geometry or violently ejected), so it stays phased until it is clear.
+        """
+        on_ramp = self._compute_elevated()
+        if not self.ramp_climb:
+            self._elevated_now = on_ramp
+            return
+
+        elevated, phased = set(on_ramp), set()
+        for n in self.possible_agents:
+            eligible = self.team[n] in self.climb_teams
+            if not eligible:
+                continue
+            if n in on_ramp:
+                self._climb_left[n] = self.climb_steps
+            elif self._climb_left[n] > 0:
+                self._climb_left[n] -= 1
+            # never re-solidify inside geometry: hold the window open until clear
+            if self._climb_left[n] <= 0 and n in self._phased and self._overlaps_low(n):
+                self._climb_left[n] = 1
+            if self._climb_left[n] > 0:
+                elevated.add(n)
+                phased.add(n)
+            # Direct rung-2 metric. Touching a wall while phased is NOT a climb (measured:
+            # that over-reports by ~3pp), so require an actual entry: the agent's centre
+            # crosses into the room this step while phased, at an x the doorway does not
+            # cover. Entering near the doorway is credited to the doorway, so the metric
+            # under-counts rather than over-counts.
+            p = self.bodies[n].position
+            now_in = self._in_room(n)
+            if now_in and not self._in_room_prev[n] and n in phased:
+                px, py = self._prev_pos.get(n, (p.x, p.y))
+                _, _, _rx, _ry = self._room_box
+                # Only a crossing of the BOTTOM boundary can be the doorway (the doorway is a
+                # gap in the bottom wall at _door_cx). Coming over the right wall is always a
+                # climb, however close to the doorway's x it happens to be.
+                crossed_bottom = py >= _ry > p.y
+                via_door = (crossed_bottom
+                            and abs(p.x - self._door_cx) <= self._door_hw + self.AGENT_RADIUS)
+                if not via_door:
+                    self._climbed.add(n)
+            self._in_room_prev[n] = now_in
+            self._prev_pos[n] = (p.x, p.y)
+
+        for n in phased - self._phased:
+            self.shapes[n].filter = self._phase_filter
+            self.space.reindex_shapes_for_body(self.bodies[n])
+        for n in self._phased - phased:
+            self.shapes[n].filter = self._solid_filter
+            self.space.reindex_shapes_for_body(self.bodies[n])
+        self._phased = phased
+        self._elevated_now = elevated
 
     def _nearest_box(self, agent):
         """Index of the box whose center is nearest the agent, and that distance."""
@@ -524,6 +638,9 @@ class HideAndSeekEnv(ParallelEnv):
         # split_roles (2+ hiders): put hider 0 at the door box and hider 1 at the ramp, so the
         # division of labor rung 3 needs (one barricades, one locks the ramp) is scaffolded.
         split_roles = bool(options.get("split_roles")) if options else False
+        # "near" / "far" pins the ramp's spawn band instead of the 50/50 coin flip — used by
+        # the climb curriculum to put the ramp within reach of a wall during discovery.
+        ramp_band = options.get("ramp_band") if options else None
         # How far above the box to place hiders when hider_at_door: default 55 keeps them
         # within LOCK_DIST (they can lock in place). A larger offset (> LOCK_DIST) puts the
         # box BETWEEN the hider and the doorway, so the hider must descend through it to
@@ -635,7 +752,9 @@ class HideAndSeekEnv(ParallelEnv):
                 self._set_ramp_dynamic()
                 (nlo, nhi), (flo, fhi) = self._ramp_bands   # per-layout: near / far spawn squares
                 while True:
-                    if self.np_random.random() < 0.5:
+                    near = (self.np_random.random() < 0.5 if ramp_band is None
+                            else ramp_band == "near")
+                    if near:
                         p = (self.np_random.uniform(nlo, nhi), self.np_random.uniform(nlo, nhi))
                     else:
                         p = (self.np_random.uniform(flo, fhi), self.np_random.uniform(flo, fhi))
@@ -711,7 +830,19 @@ class HideAndSeekEnv(ParallelEnv):
                     self.bodies[hs[1]].velocity = (0, 0)
         self.space.reindex_static()
 
-        self._elevated_now = self._compute_elevated()
+        # clear any climb state left over from the previous episode before recomputing
+        if self.ramp_climb:
+            for n in self.possible_agents:
+                self._climb_left[n] = 0
+                if n in self._phased:
+                    self.shapes[n].filter = self._solid_filter
+                    self.space.reindex_shapes_for_body(self.bodies[n])
+            self._phased = set()
+            self._climbed = set()
+            self._in_room_prev = {n: self._in_room(n) for n in self.possible_agents}
+            self._prev_pos = {n: (self.bodies[n].position.x, self.bodies[n].position.y)
+                              for n in self.possible_agents}
+        self._update_elevation()
         obs = {a: self._get_obs(a) for a in self.agents}
         infos = {a: {} for a in self.agents}
         return obs, infos
@@ -754,7 +885,7 @@ class HideAndSeekEnv(ParallelEnv):
                 scale = cap / speed
                 body.velocity = (vx * scale, vy * scale)
 
-        self._elevated_now = self._compute_elevated()
+        self._update_elevation()
 
         # --- line-of-sight reward (paper-faithful), play phase only ---
         # Team-level: seekers get +r when ANY seeker sees ANY hider, hiders get +r only when
@@ -793,6 +924,12 @@ class HideAndSeekEnv(ParallelEnv):
                 infos[a]["seeker_elevated"] = seeker_elev
                 infos[a]["ramp_lock_owner"] = self.ramp_lock_owner
                 infos[a]["ramp_active"] = self.ramp_active
+                # Direct rung-2 signal when ramp_climb is on: a seeker physically crossed a
+                # wall/box this episode. Unlike seeker_elevated (mere proximity to the ramp)
+                # this cannot be satisfied by standing around, and cannot be reached via the
+                # doorway. Always False when ramp_climb is off.
+                infos[a]["seeker_climbed"] = any(s in self._climbed
+                                                 for s in self.teams["seeker"])
 
         if time_up:
             self.agents = []

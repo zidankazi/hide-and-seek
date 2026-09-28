@@ -67,7 +67,7 @@ class HideAndSeekEnv(gym.Env):
         self.render_mode = render_mode
         self.renderer = None
         if render_mode == "human":
-            from renderer import GameRenderer
+            from hide_and_seek.renderer import GameRenderer
             self.renderer = GameRenderer(title="Hide & Seek")
 
         # Step counter, used to cap episode length at MAX_STEPS

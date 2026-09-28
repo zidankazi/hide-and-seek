@@ -30,8 +30,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from env_hs import HideAndSeekEnv
-from ppo_continuous import PPO, ActorCritic, RolloutBuffer
+from hide_and_seek.env_hs import HideAndSeekEnv
+from hide_and_seek.ppo_continuous import PPO, ActorCritic, RolloutBuffer
 
 
 # ---- config ----
